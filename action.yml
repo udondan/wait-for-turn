@@ -1,5 +1,5 @@
 name: Wait for turn
-description: Wait until all earlier active runs of the same workflow have finished
+description: Queue runs of a workflow so only one at a time uses shared resources, ordered by pull request labels
 author: udondan
 branding:
   icon: clock
@@ -10,10 +10,22 @@ inputs:
     description: Workflow file name to queue on. Defaults to the workflow of the current run.
     required: false
     default: ''
+  label-weights:
+    description: >-
+      Priority of runs by pull request label, one "label=weight" per line, for
+      example "renovate=-5". A run's weight is the sum of the weights of its
+      pull request's labels, 0 without matching labels. Runs with higher weight
+      take the turn first, runs with equal weight by start time.
+    required: false
+    default: ''
   poll-interval-seconds:
-    description: Seconds between checks.
+    description: Seconds between checks of the run that is next in line.
     required: false
     default: '30'
+  queued-poll-interval-seconds:
+    description: Seconds between checks of the other waiting runs.
+    required: false
+    default: '300'
   timeout-minutes:
     description: Fail after waiting this many minutes. 0 waits indefinitely.
     required: false
@@ -26,19 +38,23 @@ inputs:
     required: false
     default: 'false'
   token:
-    description: Token with actions:read and contents:read permission.
+    description: >-
+      Token with actions:read, contents:write and pull-requests:read permission.
+      contents:write is needed to create the lock refs under refs/wait-for-turn/.
     required: false
     default: ${{ github.token }}
 
 runs:
   using: composite
   steps:
-    - name: Wait for earlier runs to finish
+    - name: Wait for turn
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
         INPUT_WORKFLOW: ${{ inputs.workflow }}
+        INPUT_LABEL_WEIGHTS: ${{ inputs.label-weights }}
         INPUT_POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
+        INPUT_QUEUED_POLL_INTERVAL: ${{ inputs.queued-poll-interval-seconds }}
         INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         INPUT_REQUIRE_UP_TO_DATE: ${{ inputs.require-up-to-date }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
