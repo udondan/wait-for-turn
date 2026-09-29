@@ -18,8 +18,15 @@ inputs:
     description: Fail after waiting this many minutes. 0 waits indefinitely.
     required: false
     default: '0'
+  require-up-to-date:
+    description: >-
+      Fail if the pull request branch is behind its base branch. Checked before,
+      while and after waiting, so an outdated run stops right away and frees the
+      queue. Only applies to pull_request events.
+    required: false
+    default: 'false'
   token:
-    description: Token with actions:read permission.
+    description: Token with actions:read and contents:read permission.
     required: false
     default: ${{ github.token }}
 
@@ -33,4 +40,7 @@ runs:
         INPUT_WORKFLOW: ${{ inputs.workflow }}
         INPUT_POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
         INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        INPUT_REQUIRE_UP_TO_DATE: ${{ inputs.require-up-to-date }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: bash "$GITHUB_ACTION_PATH/wait.sh"

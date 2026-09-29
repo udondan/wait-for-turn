@@ -17,6 +17,27 @@ if [ -z "$workflow" ]; then
 fi
 interval="${INPUT_POLL_INTERVAL:-30}"
 timeout_minutes="${INPUT_TIMEOUT_MINUTES:-0}"
+require_up_to_date="${INPUT_REQUIRE_UP_TO_DATE:-false}"
+
+if [ "$require_up_to_date" = "true" ] && { [ -z "${BASE_REF:-}" ] || [ -z "${HEAD_SHA:-}" ]; }; then
+  echo "::notice::require-up-to-date only applies to pull_request events, skipping the check."
+  require_up_to_date=false
+fi
+
+# Fails the run if the branch is behind the base branch. Testing an outdated
+# branch is wasted time: it has to be updated and tested again anyway.
+check_up_to_date() {
+  [ "$require_up_to_date" = "true" ] || return 0
+  local behind
+  if ! behind=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_REF...$HEAD_SHA" --jq .behind_by); then
+    echo "Comparing with $BASE_REF failed, retrying later."
+    return 0
+  fi
+  if [ "$behind" -gt 0 ]; then
+    echo "::error::Branch is $behind commit(s) behind $BASE_REF. Update the branch to run the tests."
+    exit 1
+  fi
+}
 
 runs_url="repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?per_page=100"
 started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
@@ -33,10 +54,11 @@ if [ "$timeout_minutes" -gt 0 ]; then
 fi
 
 while true; do
+  check_up_to_date
   if earlier=$(gh api "$runs_url" --jq "$query"); then
     if [ -z "$earlier" ]; then
       echo "No earlier run is active."
-      exit 0
+      break
     fi
     echo "Waiting for $earlier"
   else
@@ -48,3 +70,13 @@ while true; do
   fi
   sleep "$interval"
 done
+
+# The base branch may have moved while this run waited.
+if [ "$require_up_to_date" = "true" ]; then
+  behind=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_REF...$HEAD_SHA" --jq .behind_by)
+  if [ "$behind" -gt 0 ]; then
+    echo "::error::Branch is $behind commit(s) behind $BASE_REF. Update the branch to run the tests."
+    exit 1
+  fi
+  echo "Branch is up to date with $BASE_REF."
+fi
