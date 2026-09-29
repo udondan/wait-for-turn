@@ -24,7 +24,7 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - uses: udondan/wait-for-turn@v2
+      - uses: udondan/wait-for-turn@v1
         with:
           require-up-to-date: true
           label-weights: |
