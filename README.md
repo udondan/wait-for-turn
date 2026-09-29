@@ -4,7 +4,7 @@ GitHub Action that queues the runs of a workflow so only one run at a time uses 
 
 ## How it works
 
-The run that has the turn holds the lock ref `refs/wait-for-turn/<workflow>/<n>`. The turn is released when that run completes, including all jobs after the wait. The next run takes the turn by creating ref `<n+1>`. Creating a ref fails if it already exists, so only one run can take the turn. Old lock refs are deleted.
+The run that has the turn holds the lock ref `refs/wait-for-turn/<workflow>/<n>`. The turn is released when that run completes, including all jobs after the wait, or, if its pull request is about to be auto-merged, after the merge (see [Outdated branches](#outdated-branches)). The next run takes the turn by creating ref `<n+1>`. Creating a ref fails if it already exists, so only one run can take the turn. Old lock refs are deleted.
 
 Waiting runs are ordered by weight (highest first), then by start time. A re-run of the run holding the turn keeps it. A re-run of any other run queues by its new start time.
 
@@ -48,6 +48,7 @@ All runs of the workflow must use this action, otherwise they don't take part in
 | `queued-poll-interval-seconds` | `300`                       | Seconds between checks of the other waiting runs.                           |
 | `timeout-minutes`              | `0`                         | Fail after waiting this many minutes. `0` waits indefinitely.               |
 | `require-up-to-date`           | `false`                     | Fail if the PR branch is behind its base branch (see below).                |
+| `merge-wait-minutes`           | `10`                        | Keep the turn held while the holder's PR is auto-merged (see below).        |
 | `token`                        | `github.token`              | Token with `actions: read`, `contents: write` and `pull-requests: read`.    |
 
 ## Priorities
@@ -59,6 +60,8 @@ The run holding the turn is never interrupted: a higher weight only affects whic
 ## Outdated branches
 
 With branch protection requiring branches to be up to date, testing a branch that is behind its base branch is wasted time: it has to be updated and tested again. With `require-up-to-date: true`, the action fails as soon as the branch is behind, while waiting and right before taking the turn. An outdated run stops right away and makes room for the run of the updated branch.
+
+A successful run often gets its pull request merged by auto-merge, a few seconds after the run completes. A run taking the turn in between would pass the check and then test a branch that is outdated right after the merge. So when the run holding the turn succeeded and its pull request has auto-merge enabled, the turn stays held until the pull request is merged or closed, auto-merge is disabled, or the branch turns out to be behind or conflicting. After the merge, the waiting runs fail as outdated. The wait ends after `merge-wait-minutes`, for example when another required check fails and auto-merge never merges. Pull requests you merge by hand can't be predicted: a run can still take the turn right before such a merge.
 
 ## Limitations
 
