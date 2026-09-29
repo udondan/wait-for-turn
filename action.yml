@@ -37,6 +37,14 @@ inputs:
       queue. Only applies to pull_request events.
     required: false
     default: 'false'
+  merge-wait-minutes:
+    description: >-
+      When the run holding the turn succeeded and its pull request has
+      auto-merge enabled, keep the turn held until the pull request is merged,
+      for at most this many minutes. Otherwise the next run would take the turn
+      right before the merge and test an outdated branch. 0 disables this.
+    required: false
+    default: '10'
   token:
     description: >-
       Token with actions:read, contents:write and pull-requests:read permission.
@@ -57,6 +65,8 @@ runs:
         INPUT_QUEUED_POLL_INTERVAL: ${{ inputs.queued-poll-interval-seconds }}
         INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         INPUT_REQUIRE_UP_TO_DATE: ${{ inputs.require-up-to-date }}
+        INPUT_MERGE_WAIT: ${{ inputs.merge-wait-minutes }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: bash "$GITHUB_ACTION_PATH/wait.sh"

@@ -10,6 +10,11 @@
 # (highest first), then by start time. Only the first waiting run takes the
 # turn. It checks often, the others check less often to save API requests.
 #
+# When the holder succeeded and its pull request has auto-merge enabled, the
+# pull request is merged a few seconds after the run completes. A run taking the
+# turn in between would test a branch that is outdated right after. The turn
+# stays held until the pull request is merged or can't be merged.
+#
 # The status filter of the list-runs API (?status=in_progress) is backed by a
 # search index that can be stale and return no runs although runs are active.
 # The unfiltered list is correct, so active runs are filtered client-side.
@@ -25,6 +30,7 @@ interval="${INPUT_POLL_INTERVAL:-30}"
 queued_interval="${INPUT_QUEUED_POLL_INTERVAL:-300}"
 timeout_minutes="${INPUT_TIMEOUT_MINUTES:-0}"
 require_up_to_date="${INPUT_REQUIRE_UP_TO_DATE:-false}"
+merge_wait="${INPUT_MERGE_WAIT:-10}"
 repo="repos/$GITHUB_REPOSITORY"
 lock_prefix="wait-for-turn/$workflow"
 
@@ -67,18 +73,23 @@ list_locks() {
       | select(\$n | test(\"^[0-9]+$\")) | \"\(\$n) \(.object.sha)\"" | sort -n
 }
 
-# Run ids of lock commits, by commit sha. Lock commits never change.
-# Sets holder to the run id of the lock commit.
-declare -A lock_runs=()
+# Run ids and pull request numbers of lock commits, by commit sha. Lock commits
+# never change. Sets holder to the run id and holder_pr to the pull request
+# number of the lock commit. Lock commits of runs without a pull request, and
+# of older versions, have no pull request number.
+declare -A lock_runs=() lock_prs=()
 read_holder() {
-  local sha=$1
+  local sha=$1 message
   if [ -z "${lock_runs[$sha]:-}" ]; then
-    lock_runs[$sha]=$(gh api "$repo/git/commits/$sha" --jq '.message | capture("run (?<id>[0-9]+)").id')
+    message=$(gh api "$repo/git/commits/$sha" --jq .message)
+    lock_runs[$sha]=$(jq -rn --arg m "$message" '$m | capture("run (?<id>[0-9]+)").id')
+    lock_prs[$sha]=$(jq -rn --arg m "$message" '$m | capture("pull request (?<pr>[0-9]+)").pr // ""')
   fi
   holder=${lock_runs[$sha]}
+  holder_pr=${lock_prs[$sha]}
 }
 
-# Holder runs known to have completed.
+# Conclusions of holder runs known to have completed, by run id.
 declare -A completed_runs=()
 is_active() {
   local id=$1
@@ -89,15 +100,43 @@ is_active() {
   # Not in the list of recent active runs. Ask for the run itself before
   # releasing its turn.
   # Only a missing run counts as completed, other errors keep the turn held.
-  local status
-  if ! status=$(gh api "$repo/actions/runs/$id" --jq .status 2>&1); then
-    [[ "$status" == *"HTTP 404"* ]] || return 0
-    status=completed
+  local run
+  if ! run=$(gh api "$repo/actions/runs/$id" --jq '"\(.status) \(.conclusion)"' 2>&1); then
+    [[ "$run" == *"HTTP 404"* ]] || return 0
+    run="completed missing"
   fi
-  if [ "$status" != "completed" ]; then
+  if [ "${run%% *}" != "completed" ]; then
     return 0
   fi
-  completed_runs[$id]=1
+  completed_runs[$id]=${run#* }
+  return 1
+}
+
+# Returns 0 while the pull request of a completed holder run is about to be
+# merged: the run succeeded and the pull request is open with auto-merge
+# enabled. Gives up after merge_wait minutes, for example when other required
+# checks fail and auto-merge never merges.
+declare -A merge_deadlines=()
+merge_pending() {
+  local id=$1 pr=$2 pull
+  [ -n "$pr" ] && [ "$merge_wait" -gt 0 ] || return 1
+  [ "${completed_runs[$id]:-}" = "success" ] || return 1
+  if [ -z "${merge_deadlines[$id]:-}" ]; then
+    merge_deadlines[$id]=$((SECONDS + merge_wait * 60))
+  fi
+  if [ "$SECONDS" -ge "${merge_deadlines[$id]}" ]; then
+    return 1
+  fi
+  if ! pull=$(gh api "$repo/pulls/$pr" --jq '"\(.state) \(.auto_merge != null) \(.mergeable_state)"'); then
+    echo "Reading pull request #$pr failed, retrying."
+    return 0
+  fi
+  case $pull in
+    # A branch that is behind or has conflicts is not merged until it is
+    # updated, which starts a new run.
+    "open true behind" | "open true dirty") return 1 ;;
+    "open true "*) return 0 ;;
+  esac
   return 1
 }
 
@@ -109,7 +148,11 @@ take_turn() {
   if [ -z "$tree" ]; then
     tree=$(gh api "$repo/git/commits/$GITHUB_SHA" --jq .tree.sha) || return 1
   fi
-  commit=$(gh api "$repo/git/commits" -f message="wait-for-turn: run $GITHUB_RUN_ID" -f tree="$tree" --jq .sha) || return 1
+  local message="wait-for-turn: run $GITHUB_RUN_ID"
+  if [ -n "${PR_NUMBER:-}" ]; then
+    message="$message, pull request $PR_NUMBER"
+  fi
+  commit=$(gh api "$repo/git/commits" -f message="$message" -f tree="$tree" --jq .sha) || return 1
   if ! out=$(gh api "$repo/git/refs" -f ref="refs/$lock_prefix/$n" -f sha="$commit" --silent 2>&1); then
     if [[ "$out" == *"HTTP 422"* ]]; then
       return 1
@@ -155,6 +198,7 @@ while true; do
     sleep_for=$interval
   else
     holder=""
+    holder_pr=""
     newest=0
     if [ -n "$locks" ]; then
       read -r newest sha <<<"$(echo "$locks" | tail -n 1)"
@@ -166,8 +210,14 @@ while true; do
       break
     fi
     free=true
-    if [ -n "$holder" ] && is_active "$holder"; then
-      free=false
+    held="Turn held by run $holder."
+    if [ -n "$holder" ]; then
+      if is_active "$holder"; then
+        free=false
+      elif merge_pending "$holder" "$holder_pr"; then
+        free=false
+        held="Run $holder completed, waiting for its pull request #$holder_pr to be merged."
+      fi
     fi
 
     if [ "$SECONDS" -ge "$next_refresh" ] || [ "$free" = "true" ]; then
@@ -210,7 +260,7 @@ while true; do
       if [ "$free" = "true" ]; then
         state="$state. The turn is free, waiting for the first run to take it."
       else
-        state="$state. Turn held by run $holder."
+        state="$state. $held"
       fi
     fi
     if [ "$state" != "$last_state" ]; then
