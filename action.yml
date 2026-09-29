@@ -1,0 +1,36 @@
+name: Wait for turn
+description: Wait until all earlier active runs of the same workflow have finished
+author: udondan
+branding:
+  icon: clock
+  color: blue
+
+inputs:
+  workflow:
+    description: Workflow file name to queue on. Defaults to the workflow of the current run.
+    required: false
+    default: ''
+  poll-interval-seconds:
+    description: Seconds between checks.
+    required: false
+    default: '30'
+  timeout-minutes:
+    description: Fail after waiting this many minutes. 0 waits indefinitely.
+    required: false
+    default: '0'
+  token:
+    description: Token with actions:read permission.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for earlier runs to finish
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        INPUT_WORKFLOW: ${{ inputs.workflow }}
+        INPUT_POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
+        INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+      run: bash "$GITHUB_ACTION_PATH/wait.sh"
