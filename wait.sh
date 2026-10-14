@@ -15,6 +15,13 @@
 # turn in between would test a branch that is outdated right after. The turn
 # stays held until the pull request is merged or can't be merged.
 #
+# After a merge, the branches of the other pull requests are behind and their
+# runs fail as outdated. A pull request updated right away, for example a
+# release pull request, would then be the only waiting run and take the turn,
+# although the pull requests updated a few minutes later have a higher weight.
+# So before taking the turn, a run lets open pull requests with auto-merge
+# enabled and a higher weight go first while they are about to be tested.
+#
 # The status filter of the list-runs API (?status=in_progress) is backed by a
 # search index that can be stale and return no runs although runs are active.
 # The unfiltered list is correct, so active runs are filtered client-side.
@@ -31,6 +38,7 @@ queued_interval="${INPUT_QUEUED_POLL_INTERVAL:-300}"
 timeout_minutes="${INPUT_TIMEOUT_MINUTES:-0}"
 require_up_to_date="${INPUT_REQUIRE_UP_TO_DATE:-false}"
 merge_wait="${INPUT_MERGE_WAIT:-10}"
+yield_minutes="${INPUT_YIELD_MINUTES:-10}"
 repo="repos/$GITHUB_REPOSITORY"
 lock_prefix="wait-for-turn/$workflow"
 
@@ -140,6 +148,65 @@ merge_pending() {
   return 1
 }
 
+# States of pull request head commits. "behind" when the branch is behind its
+# base branch and about to be updated, which doesn't change for a commit.
+# "tested" when the commit has a run of this workflow, checked again after
+# queued_interval as the base branch may have moved on.
+declare -A head_states=() head_checked=()
+# Sets pending to the open pull requests with auto-merge enabled and a weight
+# higher than $1 that have no active run but are about to be tested: their
+# branch is behind and about to be updated, or their head commit has no run of
+# this workflow yet. Pull requests whose head commit was tested, successfully
+# or not, are not pending.
+find_pending() {
+  local weight=$1 number sha base behind count
+  pending=""
+  while read -r number sha base; do
+    if [ "${head_states[$sha]:-}" != "behind" ] &&
+      { [ "${head_states[$sha]:-}" != "tested" ] || [ "$SECONDS" -ge "$((head_checked[$sha] + queued_interval))" ]; }; then
+      unset "head_states[$sha]"
+      if ! behind=$(gh api "$repo/compare/$base...$sha" --jq .behind_by </dev/null); then
+        # Unknown counts as pending, the wait is limited anyway.
+        pending="$pending #$number"
+        continue
+      fi
+      if [ "$behind" -gt 0 ]; then
+        head_states[$sha]=behind
+      elif count=$(gh api "$repo/actions/workflows/$workflow/runs?head_sha=$sha&per_page=1" --jq .total_count </dev/null) &&
+        [ "$count" -gt 0 ]; then
+        head_states[$sha]=tested
+        head_checked[$sha]=$SECONDS
+      fi
+    fi
+    if [ "${head_states[$sha]:-}" != "tested" ]; then
+      pending="$pending #$number"
+    fi
+  done < <(echo "$prs" | jq -r --argjson w "$weights" --argjson weight "$weight" \
+    --argjson runs "$active" --arg self "${PR_NUMBER:-}" '
+    .[] | select(.auto_merge and (.number | tostring) != $self)
+    | select(.number as $n | all($runs[]; .pr != $n))
+    | select(([.labels[] | $w[.] // 0] | add // 0) > $weight)
+    | "\(.number) \(.sha) \(.base)"')
+  pending=${pending# }
+}
+
+# Returns 0 while this run lets pending pull requests with a higher weight go
+# first. Gives up yield_minutes after it started, for example when a branch is
+# never updated.
+yield_deadline=0
+yielding() {
+  [ "$yield_minutes" -gt 0 ] || return 1
+  if [ "$yield_deadline" -gt 0 ] && [ "$SECONDS" -ge "$yield_deadline" ]; then
+    return 1
+  fi
+  find_pending "$1"
+  [ -n "$pending" ] || return 1
+  if [ "$yield_deadline" -eq 0 ]; then
+    yield_deadline=$((SECONDS + yield_minutes * 60))
+  fi
+  return 0
+}
+
 tree=""
 # Tries to take the turn by creating lock ref n. Returns 1 if another run was
 # faster.
@@ -223,7 +290,8 @@ while true; do
     if [ "$SECONDS" -ge "$next_refresh" ] || [ "$free" = "true" ]; then
       check_up_to_date
       if new_prs=$(gh api --paginate "$repo/pulls?state=open&per_page=100" \
-          --jq '.[] | {number, labels: [.labels[].name]}' | jq -s .); then
+          --jq '.[] | {number, labels: [.labels[].name], auto_merge: (.auto_merge != null),
+            sha: .head.sha, base: .base.ref}' | jq -s .); then
         prs=$new_prs
       else
         echo "Listing pull requests failed, using the last known labels."
@@ -236,6 +304,11 @@ while true; do
       | $runs | map(select((.id | tostring) != $holder) | . + {weight: ($pw[.pr | tostring] // 0)})
       | sort_by(-.weight, .run_started_at, .id)')
     position=$(echo "$queue" | jq --argjson id "$GITHUB_RUN_ID" 'map(.id) | index($id) // -1')
+
+    if [ "$free" = "true" ] && [ "$position" = "0" ] && yielding "$(echo "$queue" | jq '.[0].weight')"; then
+      free=false
+      held="Letting pull requests with a higher weight go first, they are about to be tested: $pending."
+    fi
 
     if [ "$free" = "true" ] && [ "$position" = "0" ]; then
       check_up_to_date strict

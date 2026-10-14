@@ -45,6 +45,16 @@ inputs:
       right before the merge and test an outdated branch. 0 disables this.
     required: false
     default: '10'
+  yield-to-pending-minutes:
+    description: >-
+      Before taking the turn, let open pull requests with auto-merge enabled and
+      a higher weight go first while they are about to be tested: their branch
+      is behind and about to be updated, or their head commit has no run yet.
+      Otherwise a pull request updated right after a merge takes the turn
+      before the ones updated a few minutes later. Gives up after this many
+      minutes. 0 disables this.
+    required: false
+    default: '10'
   token:
     description: >-
       Token with actions:read, contents:write and pull-requests:read permission.
@@ -66,6 +76,7 @@ runs:
         INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         INPUT_REQUIRE_UP_TO_DATE: ${{ inputs.require-up-to-date }}
         INPUT_MERGE_WAIT: ${{ inputs.merge-wait-minutes }}
+        INPUT_YIELD_MINUTES: ${{ inputs.yield-to-pending-minutes }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}

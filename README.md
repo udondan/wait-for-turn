@@ -49,6 +49,7 @@ All runs of the workflow must use this action, otherwise they don't take part in
 | `timeout-minutes`              | `0`                         | Fail after waiting this many minutes. `0` waits indefinitely.               |
 | `require-up-to-date`           | `false`                     | Fail if the PR branch is behind its base branch (see below).                |
 | `merge-wait-minutes`           | `10`                        | Keep the turn held while the holder's PR is auto-merged (see below).        |
+| `yield-to-pending-minutes`     | `10`                        | Let pending auto-merge PRs with a higher weight go first (see below).       |
 | `token`                        | `github.token`              | Token with `actions: read`, `contents: write` and `pull-requests: read`.    |
 
 ## Priorities
@@ -62,6 +63,8 @@ The run holding the turn is never interrupted: a higher weight only affects whic
 With branch protection requiring branches to be up to date, testing a branch that is behind its base branch is wasted time: it has to be updated and tested again. With `require-up-to-date: true`, the action fails as soon as the branch is behind, while waiting and right before taking the turn. An outdated run stops right away and makes room for the run of the updated branch.
 
 A successful run often gets its pull request merged by auto-merge, a few seconds after the run completes. A run taking the turn in between would pass the check and then test a branch that is outdated right after the merge. So when the run holding the turn succeeded and its pull request has auto-merge enabled, the turn stays held until the pull request is merged or closed, auto-merge is disabled, or the branch turns out to be behind or conflicting. After the merge, the waiting runs fail as outdated. The wait ends after `merge-wait-minutes`, for example when another required check fails and auto-merge never merges. Pull requests you merge by hand can't be predicted: a run can still take the turn right before such a merge.
+
+After a merge, the other pull requests are updated at different times. A release pull request, for example, is updated right away, while Renovate updates its branches a few minutes later. The run of the release pull request would be the only waiting run and take the turn, although it has the lowest weight. So before taking the turn, a run lets open pull requests with auto-merge enabled and a higher weight go first while they are about to be tested: their branch is behind the base branch and about to be updated, or their head commit has no run of the workflow yet. Pull requests whose head commit was already tested, successfully or not, don't hold up the queue. The wait ends after `yield-to-pending-minutes`, for example when a branch is never updated.
 
 ## Limitations
 
