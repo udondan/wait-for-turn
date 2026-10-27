@@ -13,7 +13,9 @@
 # When the holder succeeded and its pull request has auto-merge enabled, the
 # pull request is merged a few seconds after the run completes. A run taking the
 # turn in between would test a branch that is outdated right after. The turn
-# stays held until the pull request is merged or can't be merged.
+# stays held until the pull request is merged or can't be merged, or a new
+# commit was pushed to it: auto-merge waits for the run of the new commit, which
+# waits for the turn.
 #
 # After a merge, the branches of the other pull requests are behind and their
 # runs fail as outdated. A pull request updated right away, for example a
@@ -97,8 +99,9 @@ read_holder() {
   holder_pr=${lock_prs[$sha]}
 }
 
-# Conclusions of holder runs known to have completed, by run id.
-declare -A completed_runs=()
+# Conclusions and head commits of holder runs known to have completed, by run
+# id.
+declare -A completed_runs=() completed_shas=()
 is_active() {
   local id=$1
   [ -z "${completed_runs[$id]:-}" ] || return 1
@@ -108,25 +111,27 @@ is_active() {
   # Not in the list of recent active runs. Ask for the run itself before
   # releasing its turn.
   # Only a missing run counts as completed, other errors keep the turn held.
-  local run
-  if ! run=$(gh api "$repo/actions/runs/$id" --jq '"\(.status) \(.conclusion)"' 2>&1); then
+  local run status conclusion head_sha
+  if ! run=$(gh api "$repo/actions/runs/$id" --jq '"\(.status) \(.conclusion) \(.head_sha)"' 2>&1); then
     [[ "$run" == *"HTTP 404"* ]] || return 0
     run="completed missing"
   fi
-  if [ "${run%% *}" != "completed" ]; then
+  read -r status conclusion head_sha <<<"$run"
+  if [ "$status" != "completed" ]; then
     return 0
   fi
-  completed_runs[$id]=${run#* }
+  completed_runs[$id]=$conclusion
+  completed_shas[$id]=${head_sha:-}
   return 1
 }
 
 # Returns 0 while the pull request of a completed holder run is about to be
-# merged: the run succeeded and the pull request is open with auto-merge
-# enabled. Gives up after merge_wait minutes, for example when other required
-# checks fail and auto-merge never merges.
+# merged: the run succeeded, it tested the current head commit, and the pull
+# request is open with auto-merge enabled. Gives up after merge_wait minutes,
+# for example when other required checks fail and auto-merge never merges.
 declare -A merge_deadlines=()
 merge_pending() {
-  local id=$1 pr=$2 pull
+  local id=$1 pr=$2 pull head_sha
   [ -n "$pr" ] && [ "$merge_wait" -gt 0 ] || return 1
   [ "${completed_runs[$id]:-}" = "success" ] || return 1
   if [ -z "${merge_deadlines[$id]:-}" ]; then
@@ -135,9 +140,16 @@ merge_pending() {
   if [ "$SECONDS" -ge "${merge_deadlines[$id]}" ]; then
     return 1
   fi
-  if ! pull=$(gh api "$repo/pulls/$pr" --jq '"\(.state) \(.auto_merge != null) \(.mergeable_state)"'); then
+  if ! pull=$(gh api "$repo/pulls/$pr" --jq '"\(.state) \(.auto_merge != null) \(.mergeable_state) \(.head.sha)"'); then
     echo "Reading pull request #$pr failed, retrying."
     return 0
+  fi
+  head_sha=${pull##* }
+  pull=${pull% *}
+  # A new commit was pushed after the holder run started. Auto-merge waits for
+  # the run of the new commit, which may be waiting for this turn.
+  if [ -n "${completed_shas[$id]:-}" ] && [ "$head_sha" != "${completed_shas[$id]}" ]; then
+    return 1
   fi
   case $pull in
     # A branch that is behind or has conflicts is not merged until it is
