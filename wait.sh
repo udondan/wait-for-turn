@@ -13,7 +13,16 @@
 # When the holder succeeded and its pull request has auto-merge enabled, the
 # pull request is merged a few seconds after the run completes. A run taking the
 # turn in between would test a branch that is outdated right after. The turn
-# stays held until the pull request is merged or can't be merged.
+# stays held until the pull request is merged or can't be merged, or a new
+# commit was pushed to it: auto-merge waits for the run of the new commit, which
+# waits for the turn.
+#
+# After a merge, the branches of the other pull requests are behind and their
+# runs fail as outdated. A pull request updated right away, for example a
+# release pull request, would then be the only waiting run and take the turn,
+# although the pull requests updated a few minutes later have a higher weight.
+# So before taking the turn, a run lets open pull requests with auto-merge
+# enabled and a higher weight go first while they are about to be tested.
 #
 # The status filter of the list-runs API (?status=in_progress) is backed by a
 # search index that can be stale and return no runs although runs are active.
@@ -31,6 +40,7 @@ queued_interval="${INPUT_QUEUED_POLL_INTERVAL:-300}"
 timeout_minutes="${INPUT_TIMEOUT_MINUTES:-0}"
 require_up_to_date="${INPUT_REQUIRE_UP_TO_DATE:-false}"
 merge_wait="${INPUT_MERGE_WAIT:-10}"
+yield_minutes="${INPUT_YIELD_MINUTES:-10}"
 repo="repos/$GITHUB_REPOSITORY"
 lock_prefix="wait-for-turn/$workflow"
 
@@ -89,8 +99,9 @@ read_holder() {
   holder_pr=${lock_prs[$sha]}
 }
 
-# Conclusions of holder runs known to have completed, by run id.
-declare -A completed_runs=()
+# Conclusions and head commits of holder runs known to have completed, by run
+# id.
+declare -A completed_runs=() completed_shas=()
 is_active() {
   local id=$1
   [ -z "${completed_runs[$id]:-}" ] || return 1
@@ -100,25 +111,27 @@ is_active() {
   # Not in the list of recent active runs. Ask for the run itself before
   # releasing its turn.
   # Only a missing run counts as completed, other errors keep the turn held.
-  local run
-  if ! run=$(gh api "$repo/actions/runs/$id" --jq '"\(.status) \(.conclusion)"' 2>&1); then
+  local run status conclusion head_sha
+  if ! run=$(gh api "$repo/actions/runs/$id" --jq '"\(.status) \(.conclusion) \(.head_sha)"' 2>&1); then
     [[ "$run" == *"HTTP 404"* ]] || return 0
     run="completed missing"
   fi
-  if [ "${run%% *}" != "completed" ]; then
+  read -r status conclusion head_sha <<<"$run"
+  if [ "$status" != "completed" ]; then
     return 0
   fi
-  completed_runs[$id]=${run#* }
+  completed_runs[$id]=$conclusion
+  completed_shas[$id]=${head_sha:-}
   return 1
 }
 
 # Returns 0 while the pull request of a completed holder run is about to be
-# merged: the run succeeded and the pull request is open with auto-merge
-# enabled. Gives up after merge_wait minutes, for example when other required
-# checks fail and auto-merge never merges.
+# merged: the run succeeded, it tested the current head commit, and the pull
+# request is open with auto-merge enabled. Gives up after merge_wait minutes,
+# for example when other required checks fail and auto-merge never merges.
 declare -A merge_deadlines=()
 merge_pending() {
-  local id=$1 pr=$2 pull
+  local id=$1 pr=$2 pull head_sha
   [ -n "$pr" ] && [ "$merge_wait" -gt 0 ] || return 1
   [ "${completed_runs[$id]:-}" = "success" ] || return 1
   if [ -z "${merge_deadlines[$id]:-}" ]; then
@@ -127,9 +140,16 @@ merge_pending() {
   if [ "$SECONDS" -ge "${merge_deadlines[$id]}" ]; then
     return 1
   fi
-  if ! pull=$(gh api "$repo/pulls/$pr" --jq '"\(.state) \(.auto_merge != null) \(.mergeable_state)"'); then
+  if ! pull=$(gh api "$repo/pulls/$pr" --jq '"\(.state) \(.auto_merge != null) \(.mergeable_state) \(.head.sha)"'); then
     echo "Reading pull request #$pr failed, retrying."
     return 0
+  fi
+  head_sha=${pull##* }
+  pull=${pull% *}
+  # A new commit was pushed after the holder run started. Auto-merge waits for
+  # the run of the new commit, which may be waiting for this turn.
+  if [ -n "${completed_shas[$id]:-}" ] && [ "$head_sha" != "${completed_shas[$id]}" ]; then
+    return 1
   fi
   case $pull in
     # A branch that is behind or has conflicts is not merged until it is
@@ -138,6 +158,65 @@ merge_pending() {
     "open true "*) return 0 ;;
   esac
   return 1
+}
+
+# States of pull request head commits. "behind" when the branch is behind its
+# base branch and about to be updated, which doesn't change for a commit.
+# "tested" when the commit has a run of this workflow, checked again after
+# queued_interval as the base branch may have moved on.
+declare -A head_states=() head_checked=()
+# Sets pending to the open pull requests with auto-merge enabled and a weight
+# higher than $1 that have no active run but are about to be tested: their
+# branch is behind and about to be updated, or their head commit has no run of
+# this workflow yet. Pull requests whose head commit was tested, successfully
+# or not, are not pending.
+find_pending() {
+  local weight=$1 number sha base behind count
+  pending=""
+  while read -r number sha base; do
+    if [ "${head_states[$sha]:-}" != "behind" ] &&
+      { [ "${head_states[$sha]:-}" != "tested" ] || [ "$SECONDS" -ge "$((head_checked[$sha] + queued_interval))" ]; }; then
+      unset "head_states[$sha]"
+      if ! behind=$(gh api "$repo/compare/$base...$sha" --jq .behind_by </dev/null); then
+        # Unknown counts as pending, the wait is limited anyway.
+        pending="$pending #$number"
+        continue
+      fi
+      if [ "$behind" -gt 0 ]; then
+        head_states[$sha]=behind
+      elif count=$(gh api "$repo/actions/workflows/$workflow/runs?head_sha=$sha&per_page=1" --jq .total_count </dev/null) &&
+        [ "$count" -gt 0 ]; then
+        head_states[$sha]=tested
+        head_checked[$sha]=$SECONDS
+      fi
+    fi
+    if [ "${head_states[$sha]:-}" != "tested" ]; then
+      pending="$pending #$number"
+    fi
+  done < <(echo "$prs" | jq -r --argjson w "$weights" --argjson weight "$weight" \
+    --argjson runs "$active" --arg self "${PR_NUMBER:-}" '
+    .[] | select(.auto_merge and (.number | tostring) != $self)
+    | select(.number as $n | all($runs[]; .pr != $n))
+    | select(([.labels[] | $w[.] // 0] | add // 0) > $weight)
+    | "\(.number) \(.sha) \(.base)"')
+  pending=${pending# }
+}
+
+# Returns 0 while this run lets pending pull requests with a higher weight go
+# first. Gives up yield_minutes after it started, for example when a branch is
+# never updated.
+yield_deadline=0
+yielding() {
+  [ "$yield_minutes" -gt 0 ] || return 1
+  if [ "$yield_deadline" -gt 0 ] && [ "$SECONDS" -ge "$yield_deadline" ]; then
+    return 1
+  fi
+  find_pending "$1"
+  [ -n "$pending" ] || return 1
+  if [ "$yield_deadline" -eq 0 ]; then
+    yield_deadline=$((SECONDS + yield_minutes * 60))
+  fi
+  return 0
 }
 
 tree=""
@@ -223,7 +302,8 @@ while true; do
     if [ "$SECONDS" -ge "$next_refresh" ] || [ "$free" = "true" ]; then
       check_up_to_date
       if new_prs=$(gh api --paginate "$repo/pulls?state=open&per_page=100" \
-          --jq '.[] | {number, labels: [.labels[].name]}' | jq -s .); then
+          --jq '.[] | {number, labels: [.labels[].name], auto_merge: (.auto_merge != null),
+            sha: .head.sha, base: .base.ref}' | jq -s .); then
         prs=$new_prs
       else
         echo "Listing pull requests failed, using the last known labels."
@@ -236,6 +316,11 @@ while true; do
       | $runs | map(select((.id | tostring) != $holder) | . + {weight: ($pw[.pr | tostring] // 0)})
       | sort_by(-.weight, .run_started_at, .id)')
     position=$(echo "$queue" | jq --argjson id "$GITHUB_RUN_ID" 'map(.id) | index($id) // -1')
+
+    if [ "$free" = "true" ] && [ "$position" = "0" ] && yielding "$(echo "$queue" | jq '.[0].weight')"; then
+      free=false
+      held="Letting pull requests with a higher weight go first, they are about to be tested: $pending."
+    fi
 
     if [ "$free" = "true" ] && [ "$position" = "0" ]; then
       check_up_to_date strict
