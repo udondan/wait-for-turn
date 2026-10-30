@@ -64,6 +64,39 @@ weights=$(printf '%s\n' "${INPUT_LABEL_WEIGHTS:-}" | jq -R -s '
         // error("Invalid label-weights line: \(.). Expected label=weight."))
   | map({(.label): (.weight | tonumber)}) | add // {}')
 
+# Commit status that shows the place in the queue, visible live in the pull
+# request's checks. The log of a composite action is not shown live. Set on the
+# pull request's head commit, not the merge commit.
+status_context="${INPUT_STATUS_CONTEXT:-}"
+status_sha="${HEAD_SHA:-$GITHUB_SHA}"
+status_url="${GITHUB_SERVER_URL:-https://github.com}/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+last_status=""
+status_final=false
+fail_state=failure
+fail_description="Waiting for the turn failed, see the log."
+# Sets the commit status if it changed. Descriptions are limited to 140
+# characters. A failing request stops further updates but not the waiting.
+set_status() {
+  local state=$1 description=${2:0:140} out
+  [ -n "$status_context" ] || return 0
+  [ "$state $description" != "$last_status" ] || return 0
+  if ! out=$(gh api "$repo/statuses/$status_sha" -f state="$state" -f context="$status_context" \
+      -f description="$description" -f target_url="$status_url" --silent 2>&1); then
+    echo "::warning::Setting commit status $status_context failed, no longer updating it. The token needs statuses: write permission. $out"
+    status_context=""
+    return 0
+  fi
+  last_status="$state $description"
+}
+on_exit() {
+  local code=$?
+  if [ "$code" -ne 0 ] && [ "$status_final" != "true" ]; then
+    set_status "$fail_state" "$fail_description"
+  fi
+}
+trap on_exit EXIT
+trap 'fail_state=error; fail_description="Cancelled while waiting for the turn."; exit 130' INT TERM
+
 # Fails the run if the branch is behind the base branch. Testing an outdated
 # branch is wasted time: it has to be updated and tested again anyway.
 # With "strict", a failing API request fails the run as well.
@@ -80,6 +113,7 @@ check_up_to_date() {
   fi
   if [ "$behind" -gt 0 ]; then
     update_branch "$behind"
+    fail_description="Branch is $behind commit(s) behind $BASE_REF."
     echo "::error::Branch is $behind commit(s) behind $BASE_REF. Update the branch to run the tests."
     exit 1
   fi
@@ -100,6 +134,7 @@ update_branch() {
     echo "::error::Branch is $behind commit(s) behind $BASE_REF and rebasing it failed: $output"
     exit 1
   fi
+  fail_description="Branch was behind $BASE_REF and was rebased. The new commit starts a new run."
   echo "::notice::Branch was $behind commit(s) behind $BASE_REF and was rebased. The new commit starts a new run."
   exit 1
 }
@@ -298,6 +333,18 @@ if [ "$timeout_minutes" -gt 0 ]; then
   deadline=$((SECONDS + timeout_minutes * 60))
 fi
 
+# Marks the commit status as successful once this run has the turn.
+took_turn() {
+  local description="Took the turn."
+  if [ "$SECONDS" -ge 60 ]; then
+    description="Took the turn after $((SECONDS / 60)) min."
+  fi
+  set_status success "$description"
+  status_final=true
+}
+
+set_status pending "Waiting for the turn."
+
 while true; do
   sleep_for=$queued_interval
   if ! active=$(gh api "$runs_url" --jq "$runs_query") || ! locks=$(list_locks); then
@@ -314,16 +361,24 @@ while true; do
     if [ "$holder" = "$GITHUB_RUN_ID" ]; then
       # A re-run of the holder keeps the turn.
       echo "This run already has the turn."
+      took_turn
       break
     fi
     free=true
     held="Turn held by run $holder."
+    # Short form of held for the commit status.
+    held_by="run $holder"
+    if [ -n "$holder_pr" ]; then
+      held_by="#$holder_pr"
+    fi
+    held_status="Turn held by $held_by."
     if [ -n "$holder" ]; then
       if is_active "$holder"; then
         free=false
       elif merge_pending "$holder" "$holder_pr"; then
         free=false
         held="Run $holder completed, waiting for its pull request #$holder_pr to be merged."
+        held_status="Waiting for #$holder_pr to be merged."
       fi
     fi
 
@@ -357,12 +412,14 @@ while true; do
     if [ "$free" = "true" ] && [ "$position" = "0" ] && yielding "$(echo "$queue" | jq '.[0].weight')"; then
       free=false
       held="Letting pull requests with a higher weight go first, they are about to be tested: $pending."
+      held_status="Letting $pending go first."
     fi
 
     if [ "$free" = "true" ] && [ "$position" = "0" ]; then
       check_up_to_date strict
       if take_turn $((newest + 1)); then
         echo "Took the turn."
+        took_turn
         break
       fi
       echo "Could not take the turn, another run may have been faster. Retrying."
@@ -377,22 +434,29 @@ while true; do
     fi
     if [ "$position" = "-1" ]; then
       state="This run is not in the list of active runs yet."
+      status_description=$state
     else
       state=$(echo "$queue" | jq -r --argjson pos "$position" '
         "Position \($pos + 1) of \(length) (weight \(.[$pos].weight)). Queue: "
         + (map("\(.html_url) (weight \(.weight))") | join(", "))')
+      status_description=$(echo "$queue" | jq -r --argjson pos "$position" '
+        "Position \($pos + 1) of \(length) (weight \(.[$pos].weight))."')
       if [ "$free" = "true" ]; then
         state="$state. The turn is free, waiting for the first run to take it."
+        status_description="$status_description The turn is free."
       else
         state="$state. $held"
+        status_description="$status_description $held_status"
       fi
     fi
+    set_status pending "$status_description"
     if [ "$state" != "$last_state" ]; then
       echo "$state"
       last_state=$state
     fi
   fi
   if [ "$deadline" -gt 0 ] && [ "$SECONDS" -ge "$deadline" ]; then
+    fail_description="Timed out after $timeout_minutes minutes waiting for the turn."
     echo "::error::Timed out after $timeout_minutes minutes waiting for the turn."
     exit 1
   fi
