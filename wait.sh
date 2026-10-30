@@ -7,7 +7,8 @@
 # already exists, so only one run can take the turn.
 #
 # Waiting runs are ordered by the summed weight of their pull request labels
-# (highest first), then by start time. A run of a pull request that has a newer
+# (highest first), then by start time. Runs without a pull request, for example
+# of a push to main, have the weight no-pull-request-weight. A run of a pull request that has a newer
 # run is left out. Only the first waiting run takes the turn. It checks often,
 # the others check less often to save API requests, except while the turn is
 # free: the first run may never take it.
@@ -43,6 +44,11 @@ timeout_minutes="${INPUT_TIMEOUT_MINUTES:-0}"
 require_up_to_date="${INPUT_REQUIRE_UP_TO_DATE:-false}"
 merge_wait="${INPUT_MERGE_WAIT:-10}"
 yield_minutes="${INPUT_YIELD_MINUTES:-10}"
+no_pr_weight="${INPUT_NO_PR_WEIGHT:-0}"
+if ! [[ "$no_pr_weight" =~ ^-?(0|[1-9][0-9]*)$ ]]; then
+  echo "::error::Invalid no-pull-request-weight: $no_pr_weight. Expected an integer."
+  exit 1
+fi
 repo="repos/$GITHUB_REPOSITORY"
 lock_prefix="wait-for-turn/$workflow"
 
@@ -318,13 +324,13 @@ while true; do
     # turn, for example while other jobs finish after it failed as outdated.
     # This run always stays in the queue.
     queue=$(jq -n --argjson runs "$active" --argjson prs "$prs" --argjson w "$weights" --arg holder "$holder" \
-      --argjson self "$GITHUB_RUN_ID" '
+      --argjson self "$GITHUB_RUN_ID" --argjson nopr "$no_pr_weight" '
       ($prs | map({key: (.number | tostring), value: ([.labels[] | $w[.] // 0] | add // 0)}) | from_entries) as $pw
       | ($runs | map(select(.pr != null)) | group_by(.pr)
         | map({key: (.[0].pr | tostring), value: (map(.id) | max)}) | from_entries) as $newest
       | $runs | map(select((.id | tostring) != $holder)
         | select(.id == $self or .pr == null or $newest[.pr | tostring] == .id)
-        | . + {weight: ($pw[.pr | tostring] // 0)})
+        | . + {weight: (if .pr == null then $nopr else ($pw[.pr | tostring] // 0) end)})
       | sort_by(-.weight, .run_started_at, .id)')
     position=$(echo "$queue" | jq --argjson id "$GITHUB_RUN_ID" 'map(.id) | index($id) // -1')
 

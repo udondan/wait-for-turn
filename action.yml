@@ -18,6 +18,13 @@ inputs:
       take the turn first, runs with equal weight by start time.
     required: false
     default: ''
+  no-pull-request-weight:
+    description: >-
+      Weight of runs without a pull request, for example of a push to main.
+      Label weights don't apply to them. A negative weight lets pull requests
+      go first.
+    required: false
+    default: '0'
   poll-interval-seconds:
     description: Seconds between checks of the run that is next in line.
     required: false
@@ -71,6 +78,7 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         INPUT_WORKFLOW: ${{ inputs.workflow }}
         INPUT_LABEL_WEIGHTS: ${{ inputs.label-weights }}
+        INPUT_NO_PR_WEIGHT: ${{ inputs.no-pull-request-weight }}
         INPUT_POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
         INPUT_QUEUED_POLL_INTERVAL: ${{ inputs.queued-poll-interval-seconds }}
         INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}

@@ -72,6 +72,7 @@ All runs of the workflow must use this action, otherwise they don't take part in
 | ------------------------------ | --------------------------- | --------------------------------------------------------------------------- |
 | `workflow`                     | workflow of the current run | Workflow file name to queue on, e.g. `test.yml`.                            |
 | `label-weights`                |                             | Priority by pull request label, one `label=weight` per line (see below).    |
+| `no-pull-request-weight`       | `0`                         | Priority of runs without a pull request, e.g. a push to main (see below).   |
 | `poll-interval-seconds`        | `30`                        | Seconds between checks of the run that is next in line.                     |
 | `queued-poll-interval-seconds` | `300`                       | Seconds between checks of the other waiting runs while the turn is held.    |
 | `timeout-minutes`              | `0`                         | Fail after waiting this many minutes. `0` waits indefinitely.               |
@@ -82,7 +83,27 @@ All runs of the workflow must use this action, otherwise they don't take part in
 
 ## Priorities
 
-A run's weight is the sum of the weights of its pull request's labels. Runs without a pull request or without matching labels have weight 0. Negative weights move runs to the back of the queue, positive weights to the front. With the example above, unlabelled pull requests are tested first, then Renovate updates (configure Renovate with `"labels": ["renovate"]`), and release-please pull requests (labelled `autorelease: pending`) last. A label like `urgent=10` lets you move a single pull request to the front.
+A run's weight is the sum of the weights of its pull request's labels. Runs of pull requests without matching labels have weight 0. Runs without a pull request, for example of a push to main, have the weight `no-pull-request-weight`, 0 by default. Negative weights move runs to the back of the queue, positive weights to the front. With the example above, unlabelled pull requests are tested first, then Renovate updates (configure Renovate with `"labels": ["renovate"]`), and release-please pull requests (labelled `autorelease: pending`) last. A label like `urgent=10` lets you move a single pull request to the front.
+
+To test main as well, but only after the pull requests, give runs without a pull request the lowest weight:
+
+```yaml
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# ...
+      - uses: udondan/wait-for-turn@v1
+        with:
+          label-weights: |
+            autorelease: pending=-10
+            renovate=-5
+          no-pull-request-weight: -100
+```
+
+The run of main then also lets pending pull requests go first after a merge (see [Outdated branches](#outdated-branches)).
 
 The run holding the turn is never interrupted: a higher weight only affects which waiting run is next.
 
