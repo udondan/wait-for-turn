@@ -2,10 +2,10 @@
 
 ![wait-for-turn: Wait in line. Run one at a time.](.github/banner.webp)
 
-[![Test](https://github.com/udondan/wait-for-turn/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/udondan/wait-for-turn/actions/workflows/test.yml?query=branch%3Amain)
-[![Coverage](https://codecov.io/gh/udondan/wait-for-turn/graph/badge.svg)](https://codecov.io/gh/udondan/wait-for-turn)
 [![Release](https://img.shields.io/github/v/release/udondan/wait-for-turn)](https://github.com/udondan/wait-for-turn/releases/latest)
 [![Marketplace](https://img.shields.io/badge/marketplace-wait--for--turn-blue?logo=github)](https://github.com/marketplace/actions/wait-for-turn)
+[![Test](https://github.com/udondan/wait-for-turn/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/udondan/wait-for-turn/actions/workflows/test.yml?query=branch%3Amain)
+[![Coverage](https://codecov.io/gh/udondan/wait-for-turn/graph/badge.svg)](https://codecov.io/gh/udondan/wait-for-turn)
 [![License](https://img.shields.io/github/license/udondan/wait-for-turn)](LICENSE)
 
 GitHub Action that queues the runs of a workflow so only one run at a time uses shared resources (test stacks, environments), without cancelling pending runs the way a `concurrency` group does. Runs are ordered by the labels of their pull requests, so for example your own pull requests are tested before dependency updates, and release pull requests last.
