@@ -21,8 +21,23 @@ jobs:
         with:
           install_args: shellcheck
 
-      - name: Lint wait.sh
-        run: shellcheck wait.sh
+      - name: Lint wait.sh and tests
+        run: shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: bats
+
+      # Runs wait.sh against a fake GitHub API, see test/bin/gh.
+      - name: Test wait.sh
+        run: bats test/
 
   actions:
     runs-on: ubuntu-latest
@@ -46,7 +61,7 @@ jobs:
 
   # The only test check the ruleset requires, whatever jobs are added later.
   required:
-    needs: [shellcheck, actions]
+    needs: [shellcheck, test, actions]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -1,6 +1,7 @@
 [tools]
-# Linters of test.yml. Each lint job installs only the ones it runs.
+# Tools of test.yml. Each job installs only the ones it runs.
 actionlint = "1.7.12"
+bats = "1.14.0"
 # The runner's own shellcheck is older and reports differently. actionlint runs it over every `run:` block.
 shellcheck = "0.11.0"
 zizmor = "1.31.1"
