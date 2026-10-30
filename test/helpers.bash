@@ -50,9 +50,15 @@ teardown() {
   fi
 }
 
-# Runs wait.sh with the fake gh and the fake sleep.
+# Runs wait.sh with the fake gh and the fake sleep. Under test/coverage.sh,
+# wait.sh (and only wait.sh, `-x` is not passed on to child processes) is
+# traced for bashcov.
 run_wait() {
-  run env BASH_ENV="$FAKE_LIB/fake-sleep.bash" bash "$BATS_TEST_DIRNAME/../wait.sh"
+  local trace=()
+  if [[ -n ${WAIT_FOR_TURN_COVERAGE:-} ]]; then
+    trace=(-x)
+  fi
+  run env BASH_ENV="$FAKE_LIB/fake-sleep.bash" bash ${trace[@]+"${trace[@]}"} "$BATS_TEST_DIRNAME/../wait.sh"
 }
 
 show_output() {

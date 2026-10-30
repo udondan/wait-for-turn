@@ -8,11 +8,12 @@ A composite GitHub Action. `action.yml` maps inputs to `INPUT_*` env vars (plus 
 
 ## Commands
 
-Tool versions are pinned in `mise.toml` (bats, shellcheck, actionlint, zizmor). These are what CI (`.github/workflows/test.yml`) runs:
+Tool versions are pinned in `mise.toml` (bats, ruby, shellcheck, actionlint, zizmor), gem versions in `Gemfile`. These are what CI (`.github/workflows/test.yml`) runs:
 
 - Tests: `bats test/`
 - Single test: `bats test/wait.bats -f "takes the turn when it is free"` (`-f` is a regex on the test name)
-- Lint: `shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats`
+- Coverage: `bundle install`, then `bundle exec bashcov -- test/coverage.sh` (on macOS add `--bash-path "$(command -v bash)"`, bashcov defaults to `/bin/bash` 3.2). Writes `coverage/index.html` and `coverage/coverage.xml`, which CI uploads to Codecov. Only `wait.sh` is traced and counted, see `test/coverage.sh` and `.simplecov`.
+- Lint: `shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh`
 - Workflow lint: `actionlint` (also shellchecks every `run:` block) and `zizmor .`
 
 ## How wait.sh works

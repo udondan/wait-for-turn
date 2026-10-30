@@ -5,6 +5,10 @@ on:
   pull_request:
     branches:
       - main
+  # Coverage of main is what Codecov compares pull requests against.
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -22,10 +26,13 @@ jobs:
           install_args: shellcheck
 
       - name: Lint wait.sh and tests
-        run: shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats
+        run: shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov upload via OIDC
     steps:
       - uses: actions/checkout@v7
         with:
@@ -33,11 +40,23 @@ jobs:
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          install_args: bats
+          install_args: bats ruby
 
-      # Runs wait.sh against a fake GitHub API, see test/bin/gh.
+      - name: Install bashcov
+        run: bundle install
+
+      # Runs wait.sh against a fake GitHub API (see test/bin/gh) and measures
+      # its coverage (see test/coverage.sh).
       - name: Test wait.sh
-        run: bats test/
+        run: bundle exec bashcov -- test/coverage.sh
+
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: coverage/coverage.xml
+          disable_search: true
+          # Pull requests from forks get no OIDC token and upload without one.
+          use_oidc: ${{ !github.event.pull_request.head.repo.fork }}
+          fail_ci_if_error: false
 
   actions:
     runs-on: ubuntu-latest
