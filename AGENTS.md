@@ -12,7 +12,7 @@ Tool versions are pinned in `mise.toml` (bats, ruby, shellcheck, actionlint, ziz
 
 - Tests: `bats test/`
 - Single test: `bats test/wait.bats -f "takes the turn when it is free"` (`-f` is a regex on the test name)
-- Coverage: `bundle install`, then `bundle exec bashcov -- test/coverage.sh` (on macOS add `--bash-path "$(command -v bash)"`, bashcov defaults to `/bin/bash` 3.2). Writes `coverage/index.html` and `coverage/coverage.xml`, which CI uploads to Codecov. Only `wait.sh` is traced and counted, see `test/coverage.sh` and `.simplecov`.
+- Coverage: `bundle install`, then `bundle exec bashcov -- test/coverage.sh` (on macOS add `--bash-path "$(command -v bash)"`, bashcov defaults to `/bin/bash` 3.2). Writes `coverage/index.html` and `coverage/coverage.xml`, which CI uploads to Codecov. Only `wait.sh` is traced and counted, see `test/coverage.sh` and `.simplecov`. Coverage is 100%: avoid commands continued with a trailing `\` in `wait.sh`, bashcov counts their first line as never run. Put long jq programs and fixed arguments into variables instead (like `queue_query` and `queue_args`).
 - Lint: `shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh`
 - Workflow lint: `actionlint` (also shellchecks every `run:` block) and `zizmor .`
 

@@ -77,11 +77,11 @@ fail_description="Waiting for the turn failed, see the log."
 # Sets the commit status if it changed. Descriptions are limited to 140
 # characters. A failing request stops further updates but not the waiting.
 set_status() {
-  local state=$1 description=${2:0:140} out
+  local state=$1 description=${2:0:140} out fields
   [ -n "$status_context" ] || return 0
   [ "$state $description" != "$last_status" ] || return 0
-  if ! out=$(gh api "$repo/statuses/$status_sha" -f state="$state" -f context="$status_context" \
-      -f description="$description" -f target_url="$status_url" --silent 2>&1); then
+  fields=(-f state="$state" -f context="$status_context" -f description="$description" -f target_url="$status_url")
+  if ! out=$(gh api "$repo/statuses/$status_sha" "${fields[@]}" --silent 2>&1); then
     echo "::warning::Setting commit status $status_context failed, no longer updating it. The token needs statuses: write permission. $out"
     status_context=""
     return 0
@@ -233,6 +233,13 @@ declare -A head_states=() head_checked=()
 # branch is behind and about to be updated, or their head commit has no run of
 # this workflow yet. Pull requests whose head commit was tested, successfully
 # or not, are not pending.
+# shellcheck disable=SC2016 # jq variables
+pending_query='
+  .[] | select(.auto_merge and (.number | tostring) != $self)
+  | select(.number as $n | all($runs[]; .pr != $n))
+  | select(([.labels[] | $w[.] // 0] | add // 0) > $weight)
+  | "\(.number) \(.sha) \(.base)"'
+pending_args=(--argjson w "$weights" --arg self "${PR_NUMBER:-}")
 find_pending() {
   local weight=$1 number sha base behind count
   pending=""
@@ -256,12 +263,7 @@ find_pending() {
     if [ "${head_states[$sha]:-}" != "tested" ]; then
       pending="$pending #$number"
     fi
-  done < <(echo "$prs" | jq -r --argjson w "$weights" --argjson weight "$weight" \
-    --argjson runs "$active" --arg self "${PR_NUMBER:-}" '
-    .[] | select(.auto_merge and (.number | tostring) != $self)
-    | select(.number as $n | all($runs[]; .pr != $n))
-    | select(([.labels[] | $w[.] // 0] | add // 0) > $weight)
-    | "\(.number) \(.sha) \(.base)"')
+  done < <(echo "$prs" | jq -r "${pending_args[@]}" --argjson weight "$weight" --argjson runs "$active" "$pending_query")
   pending=${pending# }
 }
 
@@ -324,6 +326,23 @@ take_turn() {
 runs_url="$repo/actions/workflows/$workflow/runs?per_page=100"
 runs_query='[.workflow_runs[] | select(.status != "completed")
   | {id, run_started_at, html_url, pr: (.pull_requests[0].number // null)}]'
+prs_url="$repo/pulls?state=open&per_page=100"
+prs_query='.[] | {number, labels: [.labels[].name], auto_merge: (.auto_merge != null),
+  sha: .head.sha, base: .base.ref}'
+# A run of a pull request that has a newer run is left out: its commit is
+# outdated, and it may still be active although it will never take the turn,
+# for example while other jobs finish after it failed as outdated. This run
+# always stays in the queue.
+# shellcheck disable=SC2016 # jq variables
+queue_query='
+  ($prs | map({key: (.number | tostring), value: ([.labels[] | $w[.] // 0] | add // 0)}) | from_entries) as $pw
+  | ($runs | map(select(.pr != null)) | group_by(.pr)
+    | map({key: (.[0].pr | tostring), value: (map(.id) | max)}) | from_entries) as $newest
+  | $runs | map(select((.id | tostring) != $holder)
+    | select(.id == $self or .pr == null or $newest[.pr | tostring] == .id)
+    | . + {weight: (if .pr == null then $nopr else ($pw[.pr | tostring] // 0) end)})
+  | sort_by(-.weight, .run_started_at, .id)'
+queue_args=(--argjson w "$weights" --argjson self "$GITHUB_RUN_ID" --argjson nopr "$no_pr_weight")
 prs='[]'
 next_refresh=0
 last_state=""
@@ -384,9 +403,7 @@ while true; do
 
     if [ "$SECONDS" -ge "$next_refresh" ] || [ "$free" = "true" ]; then
       check_up_to_date
-      if new_prs=$(gh api --paginate "$repo/pulls?state=open&per_page=100" \
-          --jq '.[] | {number, labels: [.labels[].name], auto_merge: (.auto_merge != null),
-            sha: .head.sha, base: .base.ref}' | jq -s .); then
+      if new_prs=$(gh api --paginate "$prs_url" --jq "$prs_query" | jq -s .); then
         prs=$new_prs
       else
         echo "Listing pull requests failed, using the last known labels."
@@ -394,19 +411,7 @@ while true; do
       next_refresh=$((SECONDS + queued_interval))
     fi
 
-    # A run of a pull request that has a newer run is left out: its commit is
-    # outdated, and it may still be active although it will never take the
-    # turn, for example while other jobs finish after it failed as outdated.
-    # This run always stays in the queue.
-    queue=$(jq -n --argjson runs "$active" --argjson prs "$prs" --argjson w "$weights" --arg holder "$holder" \
-      --argjson self "$GITHUB_RUN_ID" --argjson nopr "$no_pr_weight" '
-      ($prs | map({key: (.number | tostring), value: ([.labels[] | $w[.] // 0] | add // 0)}) | from_entries) as $pw
-      | ($runs | map(select(.pr != null)) | group_by(.pr)
-        | map({key: (.[0].pr | tostring), value: (map(.id) | max)}) | from_entries) as $newest
-      | $runs | map(select((.id | tostring) != $holder)
-        | select(.id == $self or .pr == null or $newest[.pr | tostring] == .id)
-        | . + {weight: (if .pr == null then $nopr else ($pw[.pr | tostring] // 0) end)})
-      | sort_by(-.weight, .run_started_at, .id)')
+    queue=$(jq -n "${queue_args[@]}" --argjson runs "$active" --argjson prs "$prs" --arg holder "$holder" "$queue_query")
     position=$(echo "$queue" | jq --argjson id "$GITHUB_RUN_ID" 'map(.id) | index($id) // -1')
 
     if [ "$free" = "true" ] && [ "$position" = "0" ] && yielding "$(echo "$queue" | jq '.[0].weight')"; then

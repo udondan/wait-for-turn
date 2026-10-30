@@ -1,0 +1,9 @@
+# Every line of wait.sh is covered by the tests, keep it that way.
+coverage:
+  status:
+    project:
+      default:
+        target: 100%
+    patch:
+      default:
+        target: 100%
