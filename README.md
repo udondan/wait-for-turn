@@ -1,6 +1,6 @@
 # wait-for-turn
 
-![wait-for-turn: Wait in line. Run one at a time.](.github/banner.png)
+![wait-for-turn: Wait in line. Run one at a time.](.github/banner.webp)
 
 GitHub Action that queues the runs of a workflow so only one run at a time uses shared resources (test stacks, environments), without cancelling pending runs the way a `concurrency` group does. Runs are ordered by the labels of their pull requests, so for example your own pull requests are tested before dependency updates, and release pull requests last.
 
