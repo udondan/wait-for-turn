@@ -218,8 +218,34 @@ holder_succeeded() {
   refute_output_contains "runs/90 "
 }
 
-@test "this run stays in the queue although its pull request has a newer run" {
+@test "this run stays in the queue although its pull request has a newer run of the same commit" {
   add_run 110 1 00:11
+  run_wait
+  assert_status 0
+  assert_holds 1
+}
+
+@test "fails when its pull request has a newer run of another commit" {
+  add_run 110 1 00:11 in_progress "" head1b
+  run_wait
+  assert_status 1
+  assert_output_contains "A newer commit of pull request #1 is tested in https://github.com/owner/repo/actions/runs/110."
+  assert_locks
+  assert_last_commit_status "failure|Outdated, a newer commit of #1 is tested."
+}
+
+@test "fails while waiting when its pull request gets a newer commit" {
+  holder_running
+  at_tick 1 'add_run 110 1 00:11 in_progress "" head1b'
+  run_wait
+  assert_status 1
+  assert_output_contains "This commit is outdated."
+  assert_locks 1
+  [ "$(count_calls '^sleep')" -eq 1 ]
+}
+
+@test "an older run of another commit of its pull request doesn't stop this run" {
+  add_run 90 1 00:01 in_progress "" head1a
   run_wait
   assert_status 0
   assert_holds 1

@@ -9,9 +9,10 @@
 # Waiting runs are ordered by the summed weight of their pull request labels
 # (highest first), then by start time. Runs without a pull request, for example
 # of a push to main, have the weight no-pull-request-weight. A run of a pull request that has a newer
-# run is left out. Only the first waiting run takes the turn. It checks often,
-# the others check less often to save API requests, except while the turn is
-# free: the first run may never take it.
+# run is left out, and fails if the newer run is of another commit. Only the
+# first waiting run takes the turn. It checks often, the others check less often
+# to save API requests, except while the turn is free: the first run may never
+# take it.
 #
 # When the holder succeeded and its pull request has auto-merge enabled, the
 # pull request is merged a few seconds after the run completes. A run taking the
@@ -325,14 +326,15 @@ take_turn() {
 
 runs_url="$repo/actions/workflows/$workflow/runs?per_page=100"
 runs_query='[.workflow_runs[] | select(.status != "completed")
-  | {id, run_started_at, html_url, pr: (.pull_requests[0].number // null)}]'
+  | {id, run_started_at, html_url, head_sha, pr: (.pull_requests[0].number // null)}]'
 prs_url="$repo/pulls?state=open&per_page=100"
 prs_query='.[] | {number, labels: [.labels[].name], auto_merge: (.auto_merge != null),
   sha: .head.sha, base: .base.ref}'
 # A run of a pull request that has a newer run is left out: its commit is
 # outdated, and it may still be active although it will never take the turn,
 # for example while other jobs finish after it failed as outdated. This run
-# always stays in the queue.
+# stays in the queue: check_newer_run fails it if the newer run is of another
+# commit, otherwise the newer run is a duplicate of the same commit.
 # shellcheck disable=SC2016 # jq variables
 queue_query='
   ($prs | map({key: (.number | tostring), value: ([.labels[] | $w[.] // 0] | add // 0)}) | from_entries) as $pw
@@ -351,6 +353,24 @@ deadline=0
 if [ "$timeout_minutes" -gt 0 ]; then
   deadline=$((SECONDS + timeout_minutes * 60))
 fi
+
+# Fails the run when its pull request has a newer run of another commit. Its
+# commit is outdated, and the other runs leave it out of their queue, so it
+# could take the turn and test the outdated commit.
+# shellcheck disable=SC2016 # jq variables
+newer_query='[.[] | select(.pr == $pr and .id > $self and .head_sha != $sha)]
+  | max_by(.id) | .html_url // empty'
+check_newer_run() {
+  local newer
+  if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
+    return 0
+  fi
+  newer=$(echo "$active" | jq -r --argjson pr "$PR_NUMBER" --argjson self "$GITHUB_RUN_ID" --arg sha "$HEAD_SHA" "$newer_query")
+  [ -n "$newer" ] || return 0
+  fail_description="Outdated, a newer commit of #$PR_NUMBER is tested."
+  echo "::error::A newer commit of pull request #$PR_NUMBER is tested in $newer. This commit is outdated."
+  exit 1
+}
 
 # Marks the commit status as successful once this run has the turn.
 took_turn() {
@@ -383,6 +403,7 @@ while true; do
       took_turn
       break
     fi
+    check_newer_run
     free=true
     held="Turn held by run $holder."
     # Short form of held for the commit status.
