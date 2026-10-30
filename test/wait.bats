@@ -66,6 +66,40 @@ holder_succeeded() {
   assert_locks 1
 }
 
+@test "a holder run missing from the list of runs keeps the turn while it runs" {
+  hold_lock 1 200 2
+  # The run is only found when asked for directly, like a run the list missed.
+  on_api '
+    [ "$1 $2" = "GET actions/runs/200" ] || exit 0
+    rm "$FAKE_STATE/hook"
+    add_run 200 2 00:05'
+  stop_at_tick 1
+  run_wait
+  assert_status 99
+  assert_output_contains "Turn held by run 200."
+  assert_locks 1
+}
+
+@test "retries when listing the runs fails" {
+  fail_api 500 '^GET actions/workflows/test.yml/runs$'
+  at_tick 1 'rm "$FAKE_STATE/fail"'
+  run_wait
+  assert_status 0
+  assert_output_contains "Listing runs or locks failed, retrying."
+  [ "$(count_calls '^sleep 30$')" -eq 1 ]
+  assert_holds 1
+}
+
+@test "waits while this run is not in the list of active runs yet" {
+  json_edit runs.json 'map(select(.id != 100))'
+  at_tick 1 'add_run 100 1 00:10'
+  run_wait
+  assert_status 0
+  assert_output_contains "This run is not in the list of active runs yet."
+  grep -qF "pending|This run is not in the list of active runs yet." "$FAKE_STATE/statuses.log"
+  assert_holds 1
+}
+
 @test "a re-run of the holder keeps the turn" {
   hold_lock 1 100 1
   run_wait
@@ -215,6 +249,21 @@ holder_succeeded() {
   [ "$(lock_message 1)" = "wait-for-turn: run 100" ]
 }
 
+@test "keeps the last known labels when listing the pull requests fails" {
+  export INPUT_LABEL_WEIGHTS="prio=5"
+  holder_running
+  add_pr 3 prio
+  add_run 300 3 00:20
+  at_tick 1 'fail_api 500 "^GET pulls$"; complete_run 200 failure'
+  stop_at_tick 2
+  run_wait
+  assert_status 99
+  assert_output_contains "Listing pull requests failed, using the last known labels."
+  # Without the label, run 300 would be behind this run, which would take the turn.
+  assert_output_contains "Position 2 of 2 (weight 0)"
+  assert_locks 1
+}
+
 # --- Waiting for the holder's pull request to be merged ---
 
 @test "keeps the turn held until the holder's pull request is merged" {
@@ -262,6 +311,16 @@ holder_succeeded() {
   assert_output_contains "waiting for its pull request #2 to be merged"
   [ "$(count_calls '^sleep')" -eq 2 ]
   assert_holds 2
+}
+
+@test "keeps the turn held when reading the holder's pull request fails" {
+  holder_succeeded
+  fail_api 500 '^GET pulls/2$'
+  stop_at_tick 1
+  run_wait
+  assert_status 99
+  assert_output_contains "Reading pull request #2 failed, retrying."
+  assert_locks 1
 }
 
 @test "merge-wait-minutes 0 doesn't wait for the merge" {
@@ -323,6 +382,17 @@ holder_succeeded() {
   run_wait
   assert_status 0
   [ "$(count_calls '^sleep')" -eq 0 ]
+}
+
+@test "lets a pull request go first when its branch can't be compared" {
+  export INPUT_LABEL_WEIGHTS="prio=5"
+  add_pr 3 prio true
+  fail_api 500 '^GET compare/'
+  stop_at_tick 1
+  run_wait
+  assert_status 99
+  assert_output_contains "they are about to be tested: #3."
+  assert_locks
 }
 
 @test "yield-to-pending-minutes 0 doesn't let pull requests go first" {
