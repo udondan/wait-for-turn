@@ -79,9 +79,29 @@ check_up_to_date() {
     return 0
   fi
   if [ "$behind" -gt 0 ]; then
+    update_branch "$behind"
     echo "::error::Branch is $behind commit(s) behind $BASE_REF. Update the branch to run the tests."
     exit 1
   fi
+}
+
+# Rebases the pull request branch onto the base branch with update-token, then
+# fails the run: its commit is outdated, the new commit starts a new run.
+# Returns without doing anything when no update-token is set or the branch is
+# in a fork.
+update_branch() {
+  local behind=$1 output
+  [ -n "${UPDATE_TOKEN:-}" ] || return 0
+  if [ "${HEAD_REPO:-}" != "$GITHUB_REPOSITORY" ]; then
+    echo "::notice::The branch is in another repository and can't be updated."
+    return 0
+  fi
+  if ! output=$(GH_TOKEN="$UPDATE_TOKEN" gh pr update-branch "$PR_NUMBER" --rebase -R "$GITHUB_REPOSITORY" 2>&1); then
+    echo "::error::Branch is $behind commit(s) behind $BASE_REF and rebasing it failed: $output"
+    exit 1
+  fi
+  echo "::notice::Branch was $behind commit(s) behind $BASE_REF and was rebased. The new commit starts a new run."
+  exit 1
 }
 
 # Prints "<n> <commit sha>" of all lock refs, sorted by n.

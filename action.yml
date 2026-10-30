@@ -41,9 +41,18 @@ inputs:
     description: >-
       Fail if the pull request branch is behind its base branch. Checked before,
       while and after waiting, so an outdated run stops right away and frees the
-      queue. Only applies to pull_request events.
+      queue. With update-token, the branch is rebased onto the base branch
+      first. Only applies to pull_request events.
     required: false
     default: 'false'
+  update-token:
+    description: >-
+      Token with contents:write and pull-requests:write permission, used with
+      require-up-to-date to rebase a branch that is behind its base branch. The
+      push has to start a new run, so this can't be github.token. Branches of
+      forks are never updated. Empty disables updating.
+    required: false
+    default: ''
   merge-wait-minutes:
     description: >-
       When the run holding the turn succeeded and its pull request has
@@ -88,4 +97,6 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        UPDATE_TOKEN: ${{ inputs.update-token }}
       run: bash "$GITHUB_ACTION_PATH/wait.sh"

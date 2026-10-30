@@ -28,7 +28,7 @@ flowchart TD
     merge -- no --> free[Turn free]
     held --> uptodate{"Branch up to date? (require-up-to-date)"}
     free --> uptodate
-    uptodate -- no --> outdated([Fail: branch is behind])
+    uptodate -- no --> outdated(["Fail: branch is behind (rebased first with update-token)"])
     uptodate -- yes --> queue["Order waiting runs by label weight, then start time, leaving out runs of PRs with a newer run"]
     queue --> first{Turn free and this run first?}
     first -- yes --> take[Create lock ref n+1]
@@ -79,6 +79,7 @@ All runs of the workflow must use this action, otherwise they don't take part in
 | `require-up-to-date`           | `false`                     | Fail if the PR branch is behind its base branch (see below).                |
 | `merge-wait-minutes`           | `10`                        | Keep the turn held while the holder's PR is auto-merged (see below).        |
 | `yield-to-pending-minutes`     | `10`                        | Let pending auto-merge PRs with a higher weight go first (see below).       |
+| `update-token`                 |                             | Token to rebase a PR branch that is behind (see below).                     |
 | `token`                        | `github.token`              | Token with `actions: read`, `contents: write` and `pull-requests: read`.    |
 
 ## Priorities
@@ -110,6 +111,15 @@ The run holding the turn is never interrupted: a higher weight only affects whic
 ## Outdated branches
 
 With branch protection requiring branches to be up to date, testing a branch that is behind its base branch is wasted time: it has to be updated and tested again. With `require-up-to-date: true`, the action fails as soon as the branch is behind, while waiting and right before taking the turn. An outdated run stops right away and makes room for the run of the updated branch.
+
+Not every branch gets updated after a merge. release-please, for example, leaves its pull request alone when the merged commit doesn't change the changelog, so its runs would fail forever. With `update-token`, the action rebases a branch that is behind onto the base branch before failing, and the new commit starts a new run. Pushes made with `github.token` don't start workflow runs, so `update-token` has to be a personal access token or a GitHub App token with `contents: write` and `pull-requests: write`. Branches of forks are never updated.
+
+```yaml
+      - uses: udondan/wait-for-turn@v1
+        with:
+          require-up-to-date: true
+          update-token: ${{ secrets.UPDATE_TOKEN }}
+```
 
 A successful run often gets its pull request merged by auto-merge, a few seconds after the run completes. A run taking the turn in between would pass the check and then test a branch that is outdated right after the merge. So when the run holding the turn succeeded and its pull request has auto-merge enabled, the turn stays held until the pull request is merged or closed, auto-merge is disabled, the branch turns out to be behind or conflicting, or a new commit was pushed to it. A new commit is merged only after its own run, which may be waiting for this turn. After the merge, the waiting runs fail as outdated. The wait ends after `merge-wait-minutes`, for example when another required check fails and auto-merge never merges. Pull requests you merge by hand can't be predicted: a run can still take the turn right before such a merge.
 
