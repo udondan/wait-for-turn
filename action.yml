@@ -23,7 +23,7 @@ inputs:
     required: false
     default: '30'
   queued-poll-interval-seconds:
-    description: Seconds between checks of the other waiting runs.
+    description: Seconds between checks of the other waiting runs while the turn is held.
     required: false
     default: '300'
   timeout-minutes:

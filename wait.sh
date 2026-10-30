@@ -7,8 +7,10 @@
 # already exists, so only one run can take the turn.
 #
 # Waiting runs are ordered by the summed weight of their pull request labels
-# (highest first), then by start time. Only the first waiting run takes the
-# turn. It checks often, the others check less often to save API requests.
+# (highest first), then by start time. A run of a pull request that has a newer
+# run is left out. Only the first waiting run takes the turn. It checks often,
+# the others check less often to save API requests, except while the turn is
+# free: the first run may never take it.
 #
 # When the holder succeeded and its pull request has auto-merge enabled, the
 # pull request is merged a few seconds after the run completes. A run taking the
@@ -311,9 +313,18 @@ while true; do
       next_refresh=$((SECONDS + queued_interval))
     fi
 
-    queue=$(jq -n --argjson runs "$active" --argjson prs "$prs" --argjson w "$weights" --arg holder "$holder" '
+    # A run of a pull request that has a newer run is left out: its commit is
+    # outdated, and it may still be active although it will never take the
+    # turn, for example while other jobs finish after it failed as outdated.
+    # This run always stays in the queue.
+    queue=$(jq -n --argjson runs "$active" --argjson prs "$prs" --argjson w "$weights" --arg holder "$holder" \
+      --argjson self "$GITHUB_RUN_ID" '
       ($prs | map({key: (.number | tostring), value: ([.labels[] | $w[.] // 0] | add // 0)}) | from_entries) as $pw
-      | $runs | map(select((.id | tostring) != $holder) | . + {weight: ($pw[.pr | tostring] // 0)})
+      | ($runs | map(select(.pr != null)) | group_by(.pr)
+        | map({key: (.[0].pr | tostring), value: (map(.id) | max)}) | from_entries) as $newest
+      | $runs | map(select((.id | tostring) != $holder)
+        | select(.id == $self or .pr == null or $newest[.pr | tostring] == .id)
+        | . + {weight: ($pw[.pr | tostring] // 0)})
       | sort_by(-.weight, .run_started_at, .id)')
     position=$(echo "$queue" | jq --argjson id "$GITHUB_RUN_ID" 'map(.id) | index($id) // -1')
 
@@ -333,7 +344,9 @@ while true; do
       continue
     fi
 
-    if [ "$position" = "0" ]; then
+    # The first run checks often. While the turn is free, so do all others: the
+    # first run may never take it, for example when it fails as outdated.
+    if [ "$position" = "0" ] || [ "$free" = "true" ]; then
       sleep_for=$interval
     fi
     if [ "$position" = "-1" ]; then

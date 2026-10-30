@@ -8,9 +8,9 @@ GitHub Action that queues the runs of a workflow so only one run at a time uses 
 
 The run that has the turn holds the lock ref `refs/wait-for-turn/<workflow>/<n>`. The turn is released when that run completes, including all jobs after the wait, or, if its pull request is about to be auto-merged, after the merge (see [Outdated branches](#outdated-branches)). The next run takes the turn by creating ref `<n+1>`. Creating a ref fails if it already exists, so only one run can take the turn. Old lock refs are deleted.
 
-Waiting runs are ordered by weight (highest first), then by start time. A re-run of the run holding the turn keeps it. A re-run of any other run queues by its new start time.
+Waiting runs are ordered by weight (highest first), then by start time. A re-run of the run holding the turn keeps it. A re-run of any other run queues by its new start time. A run of a pull request that has a newer run is left out of the queue: its commit is outdated, and it can stay active for a while after it stopped waiting, for example while other jobs finish after it failed as outdated.
 
-The run that is next in line checks every `poll-interval-seconds`, the other waiting runs every `queued-poll-interval-seconds`. This keeps the API requests low when many runs are waiting. Labels are read while waiting, so labelling a pull request moves its waiting run in the queue.
+The run that is next in line checks every `poll-interval-seconds`, the other waiting runs every `queued-poll-interval-seconds`. This keeps the API requests low when many runs are waiting. While the turn is free, all waiting runs check every `poll-interval-seconds`, so the next run takes the turn quickly when the first one never does. Labels are read while waiting, so labelling a pull request moves its waiting run in the queue.
 
 Active runs are read from the unfiltered run list. The `status` filter of the GitHub API is backed by a search index that can be stale and miss active runs (see [softprops/turnstyle#165](https://github.com/softprops/turnstyle/issues/165)).
 
@@ -29,14 +29,14 @@ flowchart TD
     held --> uptodate{"Branch up to date? (require-up-to-date)"}
     free --> uptodate
     uptodate -- no --> outdated([Fail: branch is behind])
-    uptodate -- yes --> queue[Order waiting runs by label weight, then start time]
+    uptodate -- yes --> queue["Order waiting runs by label weight, then start time, leaving out runs of PRs with a newer run"]
     queue --> first{Turn free and this run first?}
     first -- yes --> take[Create lock ref n+1]
     take -- created --> done
     take -- "already exists" --> poll
     first -- no --> timeout{timeout-minutes reached?}
     timeout -- yes --> timedout([Fail: timed out])
-    timeout -- no --> sleep["Sleep poll-interval-seconds if first in line, else queued-poll-interval-seconds"]
+    timeout -- no --> sleep["Sleep poll-interval-seconds if first in line or the turn is free, else queued-poll-interval-seconds"]
     sleep --> poll
 ```
 
@@ -73,7 +73,7 @@ All runs of the workflow must use this action, otherwise they don't take part in
 | `workflow`                     | workflow of the current run | Workflow file name to queue on, e.g. `test.yml`.                            |
 | `label-weights`                |                             | Priority by pull request label, one `label=weight` per line (see below).    |
 | `poll-interval-seconds`        | `30`                        | Seconds between checks of the run that is next in line.                     |
-| `queued-poll-interval-seconds` | `300`                       | Seconds between checks of the other waiting runs.                           |
+| `queued-poll-interval-seconds` | `300`                       | Seconds between checks of the other waiting runs while the turn is held.    |
 | `timeout-minutes`              | `0`                         | Fail after waiting this many minutes. `0` waits indefinitely.               |
 | `require-up-to-date`           | `false`                     | Fail if the PR branch is behind its base branch (see below).                |
 | `merge-wait-minutes`           | `10`                        | Keep the turn held while the holder's PR is auto-merged (see below).        |
