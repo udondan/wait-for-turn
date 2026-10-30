@@ -71,6 +71,15 @@ inputs:
       minutes. 0 disables this.
     required: false
     default: '10'
+  status-context:
+    description: >-
+      Context of a commit status that shows the run's place in the queue while
+      it waits, for example "wait-for-turn". It is visible live in the pull
+      request's checks, unlike the log. Pending while waiting, success when the
+      run took the turn, failure when waiting failed. Needs statuses:write
+      permission on token. Empty disables it.
+    required: false
+    default: ''
   token:
     description: >-
       Token with actions:read, contents:write and pull-requests:read permission.
@@ -94,6 +103,7 @@ runs:
         INPUT_REQUIRE_UP_TO_DATE: ${{ inputs.require-up-to-date }}
         INPUT_MERGE_WAIT: ${{ inputs.merge-wait-minutes }}
         INPUT_YIELD_MINUTES: ${{ inputs.yield-to-pending-minutes }}
+        INPUT_STATUS_CONTEXT: ${{ inputs.status-context }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
