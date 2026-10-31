@@ -1,0 +1,105 @@
+---
+name: Test
+
+on:
+  pull_request:
+    branches:
+      - main
+  # Coverage of main is what Codecov compares pull requests against.
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: shellcheck
+
+      - name: Lint wait.sh and tests
+        run: shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh test/e2e/*.sh test/e2e/scenarios/*.sh test/e2e/template/scripts/*.sh
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov upload via OIDC
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: bats ruby
+
+      - name: Install bashcov
+        run: bundle install
+
+      # Runs wait.sh against a fake GitHub API (see test/bin/gh) and measures
+      # its coverage (see test/coverage.sh).
+      - name: Test wait.sh
+        run: bundle exec bashcov -- test/coverage.sh
+
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: coverage/coverage.xml
+          disable_search: true
+          # Pull requests from forks get no OIDC token and upload without one.
+          use_oidc: ${{ !github.event.pull_request.head.repo.fork }}
+          fail_ci_if_error: false
+
+  actions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: actionlint shellcheck zizmor
+
+      # Also runs shellcheck over every `run:` block.
+      - name: actionlint
+        run: |
+          actionlint
+          actionlint test/e2e/template/.github/workflows/*.yml
+
+      - name: zizmor
+        run: zizmor .
+        env:
+          GH_TOKEN: ${{ github.token }} # zizmor checks the actions online
+
+  # Calls the reusable workflow of this commit as other repositories do, so a
+  # broken change of it or of the action fails here before it is released.
+  # Pull requests from forks get no write permissions and can't take the turn.
+  wait-for-turn:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      actions: read
+      contents: write # lock refs under refs/wait-for-turn/
+      pull-requests: read # labels for label-weights
+      statuses: write # queue position as commit status
+    uses: $/.github/workflows/wait-for-turn.yml
+    secrets:
+      update-token: ${{ secrets.OVERRIDE_TOKEN }}
+
+  # The only test check the ruleset requires, whatever jobs are added later.
+  required:
+    needs: [shellcheck, test, actions, wait-for-turn]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check result
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

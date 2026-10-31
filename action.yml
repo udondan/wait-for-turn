@@ -1,0 +1,123 @@
+name: Wait for turn
+description: Queue runs of a workflow so only one at a time uses shared resources, ordered by pull request labels
+author: udondan
+branding:
+  icon: clock
+  color: blue
+
+inputs:
+  workflow:
+    description: Workflow file name to queue on. Defaults to the workflow of the current run.
+    required: false
+    default: ''
+  label-weights:
+    description: >-
+      Priority of runs by pull request label, one "label=weight" per line, for
+      example "renovate=-5". A run's weight is the sum of the weights of its
+      pull request's labels, 0 without matching labels. Runs with higher weight
+      take the turn first, runs with equal weight by start time.
+    required: false
+    default: ''
+  no-pull-request-weight:
+    description: >-
+      Weight of runs without a pull request, for example of a push to main.
+      Label weights don't apply to them. A negative weight lets pull requests
+      go first.
+    required: false
+    default: '0'
+  poll-interval-seconds:
+    description: Seconds between checks of the run that is next in line.
+    required: false
+    default: '30'
+  queued-poll-interval-seconds:
+    description: Seconds between checks of the other waiting runs while the turn is held.
+    required: false
+    default: '300'
+  timeout-minutes:
+    description: Fail after waiting this many minutes. 0 waits indefinitely.
+    required: false
+    default: '0'
+  require-up-to-date:
+    description: >-
+      Fail if the pull request branch is behind its base branch. Checked before,
+      while and after waiting, so an outdated run stops right away and frees the
+      queue. With update-token, the branch is rebased onto the base branch
+      first. Only applies to pull_request events.
+    required: false
+    default: 'false'
+  update-token:
+    description: >-
+      Token with contents:write and pull-requests:write permission, used with
+      require-up-to-date to rebase a branch that is behind its base branch. The
+      push has to start a new run, so this can't be github.token. Branches of
+      forks are never updated. Empty disables updating.
+    required: false
+    default: ''
+  merge-wait-minutes:
+    description: >-
+      When the run holding the turn succeeded and its pull request has
+      auto-merge enabled, keep the turn held until the pull request is merged,
+      for at most this many minutes. Otherwise the next run would take the turn
+      right before the merge and test an outdated branch. A pull request
+      blocked by a failed required check releases the turn right away. 0
+      disables this.
+    required: false
+    default: '10'
+  yield-to-pending-minutes:
+    description: >-
+      Before taking the turn, let open pull requests with auto-merge enabled and
+      a higher weight go first while they are about to be tested: their head
+      commit has no run yet. Otherwise a pull request updated right after a
+      merge takes the turn before the ones updated a few minutes later. Gives up
+      after this many minutes. 0 disables this.
+    required: false
+    default: '10'
+  update-pending-branches:
+    description: >-
+      With yield-to-pending-minutes, also rebase the branches of open pull
+      requests with auto-merge enabled and a higher weight whose head commit was
+      tested but is behind the base branch, and let their new commit go first.
+      Without this, such pull requests are not waited for: nothing starts a new
+      run for them. Needs update-token. Branches of forks are never updated.
+    required: false
+    default: 'false'
+  status-context:
+    description: >-
+      Context of a commit status that shows the run's place in the queue while
+      it waits, for example "wait-for-turn". It is visible live in the pull
+      request's checks, unlike the log. Pending while waiting, success when the
+      run took the turn, failure when waiting failed. Needs statuses:write
+      permission on token. Empty disables it.
+    required: false
+    default: ''
+  token:
+    description: >-
+      Token with actions:read, contents:write and pull-requests:read permission.
+      contents:write is needed to create the lock refs under refs/wait-for-turn/.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for turn
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        INPUT_WORKFLOW: ${{ inputs.workflow }}
+        INPUT_LABEL_WEIGHTS: ${{ inputs.label-weights }}
+        INPUT_NO_PR_WEIGHT: ${{ inputs.no-pull-request-weight }}
+        INPUT_POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
+        INPUT_QUEUED_POLL_INTERVAL: ${{ inputs.queued-poll-interval-seconds }}
+        INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        INPUT_REQUIRE_UP_TO_DATE: ${{ inputs.require-up-to-date }}
+        INPUT_MERGE_WAIT: ${{ inputs.merge-wait-minutes }}
+        INPUT_YIELD_MINUTES: ${{ inputs.yield-to-pending-minutes }}
+        INPUT_UPDATE_PENDING: ${{ inputs.update-pending-branches }}
+        INPUT_STATUS_CONTEXT: ${{ inputs.status-context }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        UPDATE_TOKEN: ${{ inputs.update-token }}
+      run: exec bash "$GITHUB_ACTION_PATH/wait.sh"

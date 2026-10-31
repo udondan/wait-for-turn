@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Fake gh for the tests. Answers the API calls of wait.sh from the state in
+# $FAKE_STATE, see test/lib/state.bash.
+set -euo pipefail
+
+# shellcheck source=test/lib/state.bash
+source "$FAKE_LIB/state.bash"
+
+log() {
+  echo "$*" >>"$FAKE_STATE/calls.log"
+}
+
+# Fails like gh does: message with the HTTP code on stderr, exit code 1.
+http_error() {
+  echo "gh: $2 (HTTP $1)" >&2
+  exit 1
+}
+
+# Fails the call if a line of the fail file matches it.
+check_fail() {
+  local code regex
+  [ -f "$FAKE_STATE/fail" ] || return 0
+  while read -r code regex; do
+    if [[ "$1" =~ $regex ]]; then
+      http_error "$code" "Fake failure"
+    fi
+  done <"$FAKE_STATE/fail"
+}
+
+if [ "${1:-}" = "pr" ]; then
+  # gh pr update-branch <number> --rebase -R <repo>
+  log "PR ${*:2} token=${GH_TOKEN:-}"
+  check_fail "PR $2"
+  exit 0
+fi
+[ "${1:-}" = "api" ] || { echo "fake gh: unhandled command: $*" >&2; log "UNHANDLED $*"; exit 2; }
+shift
+
+method="" endpoint="" jq_query="" silent=false
+fields=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -X) method=$2; shift 2 ;;
+    -f | -F) fields+=("$2"); shift 2 ;;
+    --jq) jq_query=$2; shift 2 ;;
+    --silent) silent=true; shift ;;
+    --paginate) shift ;;
+    -*) echo "fake gh: unknown flag $1" >&2; log "UNHANDLED flag $1"; exit 2 ;;
+    *) endpoint=$1; shift ;;
+  esac
+done
+if [ -z "$method" ]; then
+  method=GET
+  [ ${#fields[@]} -eq 0 ] || method=POST
+fi
+
+field() {
+  local f
+  for f in "${fields[@]}"; do
+    if [[ "$f" == "$1="* ]]; then
+      echo "${f#*=}"
+      return
+    fi
+  done
+}
+
+path=${endpoint#repos/"$GITHUB_REPOSITORY"/}
+query=""
+if [[ "$path" == *"?"* ]]; then
+  query=${path#*\?}
+  path=${path%%\?*}
+fi
+
+log "$method $path${query:+?$query}${fields[*]:+ ${fields[*]}}"
+if [ -f "$FAKE_STATE/hook" ]; then
+  bash "$FAKE_STATE/hook" "$method" "$path"
+fi
+check_fail "$method $path"
+# Also with the query, to fail calls of one query only, e.g. "head_sha=".
+[ -z "$query" ] || check_fail "$method $path?$query"
+
+respond() {
+  if [ "$silent" = "true" ]; then
+    return
+  fi
+  if [ -n "$jq_query" ]; then
+    jq -r "$jq_query" <<<"$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+case "$method $path" in
+  "POST statuses/"*)
+    echo "$(field state)|$(field description)" >>"$FAKE_STATE/statuses.log"
+    respond '{}'
+    ;;
+  "GET compare/"*)
+    head=${path#*...}
+    respond "{\"behind_by\": $(cat "$FAKE_STATE/compare/$head" 2>/dev/null || echo 0)}"
+    ;;
+  "GET git/matching-refs/"*)
+    prefix=${path#git/matching-refs/}
+    refs='[]'
+    if [ -d "$FAKE_STATE/refs/$prefix" ]; then
+      for file in "$FAKE_STATE/refs/$prefix"*; do
+        [ -f "$file" ] || continue
+        refs=$(jq --arg ref "refs/${file#"$FAKE_STATE/refs/"}" --arg sha "$(cat "$file")" \
+          '. + [{ref: $ref, object: {sha: $sha}}]' <<<"$refs")
+      done
+    fi
+    respond "$refs"
+    ;;
+  "GET git/commits/"*)
+    sha=${path#git/commits/}
+    message=$(cat "$FAKE_STATE/commits/$sha" 2>/dev/null || true)
+    respond "$(jq -n --arg sha "$sha" --arg m "$message" '{sha: $sha, message: $m, tree: {sha: "tree0"}}')"
+    ;;
+  "POST git/commits")
+    respond "{\"sha\": \"$(new_commit "$(field message)")\"}"
+    ;;
+  "POST git/refs")
+    file=$FAKE_STATE/$(field ref)
+    if [ -f "$file" ]; then
+      http_error 422 "Reference already exists"
+    fi
+    mkdir -p "$(dirname "$file")"
+    field sha >"$file"
+    respond '{}'
+    ;;
+  "DELETE git/refs/"*)
+    file=$FAKE_STATE/refs/${path#git/refs/}
+    [ -f "$file" ] || http_error 422 "Reference does not exist"
+    rm "$file"
+    ;;
+  "GET actions/workflows/$FAKE_WORKFLOW/runs")
+    if [[ "$query" =~ head_sha=([^&]+) ]]; then
+      respond "$(jq --arg sha "${BASH_REMATCH[1]}" 'map(select(.head_sha == $sha))
+        | {total_count: length, workflow_runs: .}' "$FAKE_STATE/runs.json")"
+    else
+      respond "$(jq '{total_count: length, workflow_runs: .}' "$FAKE_STATE/runs.json")"
+    fi
+    ;;
+  "GET actions/runs/"*)
+    run=$(jq --argjson id "${path#actions/runs/}" '.[] | select(.id == $id)' "$FAKE_STATE/runs.json")
+    [ -n "$run" ] || http_error 404 "Not Found"
+    respond "$run"
+    ;;
+  "POST graphql")
+    # Only the query for the failed required checks of a pull request.
+    checks=$(cat "$FAKE_STATE/checks/$(field number)" 2>/dev/null || echo '[]')
+    respond "$(jq -n --argjson c "$checks" '{data: {repository: {pullRequest: {commits: {nodes: [{commit: {statusCheckRollup: {contexts: {nodes: $c}}}}]}}}}}')"
+    ;;
+  "GET pulls")
+    respond "$(jq 'map(select(.state == "open"))' "$FAKE_STATE/pulls.json")"
+    ;;
+  "GET pulls/"*)
+    pull=$(jq --argjson n "${path#pulls/}" '.[] | select(.number == $n)' "$FAKE_STATE/pulls.json")
+    [ -n "$pull" ] || http_error 404 "Not Found"
+    respond "$pull"
+    ;;
+  *)
+    echo "fake gh: unhandled call: $method $path" >&2
+    log "UNHANDLED $method $path"
+    exit 2
+    ;;
+esac

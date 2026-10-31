@@ -1,0 +1,9 @@
+# actionlint doesn't know the self-repository syntax `uses: $/...` yet, which
+# runs an action or workflow of this repository at the running commit.
+paths:
+  .github/workflows/wait-for-turn.yml:
+    ignore:
+      - 'specifying action "\$/" in invalid format'
+  .github/workflows/test.yml:
+    ignore:
+      - 'reusable workflow call "\$/\.github/workflows/wait-for-turn\.yml"'

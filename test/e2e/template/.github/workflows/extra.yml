@@ -1,0 +1,26 @@
+# A second required check, independent of wait-for-turn. It fails when the
+# pull request has a file named fail-extra: the pipeline run succeeds, but
+# auto-merge never merges, as when another required check fails.
+name: Extra
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  extra-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check
+        run: |
+          if [ -f fail-extra ]; then
+            echo "::error::Failing on purpose: fail-extra exists."
+            exit 1
+          fi

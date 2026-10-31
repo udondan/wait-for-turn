@@ -1,0 +1,110 @@
+---
+# Reusable workflow with the wait job as described in the README: the action
+# plus the job settings an action can't set, like the concurrency group that
+# cancels outdated waiting runs. Call it as a job:
+#
+#   wait-for-turn:
+#     permissions:
+#       actions: read
+#       contents: write
+#       pull-requests: read
+#       statuses: write
+#     uses: udondan/wait-for-turn/.github/workflows/wait-for-turn.yml@v1
+#
+# It only runs when called, never on events of this repository. The inputs are
+# the inputs of the action. Some defaults differ from the action's, see
+# "Reusable workflow" in the README.
+#
+# `uses: $/` runs the action of this repository at the commit of this file, so
+# workflow and action never differ, whatever ref the caller uses.
+name: Wait for turn
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: Workflow file name to queue on. Defaults to the calling workflow.
+        type: string
+        default: ''
+      label-weights:
+        description: Priority of runs by pull request label, one "label=weight" per line.
+        type: string
+        default: |
+          autorelease: pending=-10
+          renovate=-5
+      no-pull-request-weight:
+        description: Weight of runs without a pull request, for example of a push to main.
+        type: number
+        default: -100
+      poll-interval-seconds:
+        description: Seconds between checks of the run that is next in line.
+        type: number
+        default: 30
+      queued-poll-interval-seconds:
+        description: Seconds between checks of the other waiting runs while the turn is held.
+        type: number
+        default: 300
+      timeout-minutes:
+        description: Fail after waiting this many minutes. 0 waits until the job times out after 6 hours.
+        type: number
+        default: 180
+      require-up-to-date:
+        description: Fail if the pull request branch is behind its base branch.
+        type: boolean
+        default: true
+      merge-wait-minutes:
+        description: Keep the turn held while the holder's pull request is auto-merged, for at most this many minutes.
+        type: number
+        default: 10
+      yield-to-pending-minutes:
+        description: Let pending auto-merge pull requests with a higher weight go first, for at most this many minutes.
+        type: number
+        default: 10
+      update-pending-branches:
+        description: Also rebase pending auto-merge pull requests with a higher weight whose tested branch is behind, and let them go first. Needs the update-token secret.
+        type: boolean
+        default: false
+      status-context:
+        description: Context of a commit status showing the place in the queue. Empty disables it.
+        type: string
+        default: wait-for-turn
+    secrets:
+      update-token:
+        description: Token to rebase a pull request branch that is behind. Without it, such a run only fails.
+        required: false
+      token:
+        description: Token for the GitHub API. Defaults to github.token of the calling job.
+        required: false
+
+# No permissions block: the job gets the permissions of the calling job, which
+# grants actions: read, contents: write (lock refs), pull-requests: read
+# (labels) and, with status-context, statuses: write.
+
+jobs:
+  wait-for-turn:
+    name: Wait for turn
+    runs-on: ubuntu-latest
+    # A new commit on the branch cancels the waiting of the outdated run, so the
+    # new run doesn't queue behind it. Once a run has the turn, this job is
+    # done: the jobs after it that already run are never cancelled. github.*
+    # is the context of the calling workflow.
+    concurrency:
+      group: wait-for-turn-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Wait for turn
+        uses: $/
+        with:
+          workflow: ${{ inputs.workflow }}
+          label-weights: ${{ inputs.label-weights }}
+          no-pull-request-weight: ${{ inputs.no-pull-request-weight }}
+          poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
+          queued-poll-interval-seconds: ${{ inputs.queued-poll-interval-seconds }}
+          timeout-minutes: ${{ inputs.timeout-minutes }}
+          require-up-to-date: ${{ inputs.require-up-to-date }}
+          merge-wait-minutes: ${{ inputs.merge-wait-minutes }}
+          yield-to-pending-minutes: ${{ inputs.yield-to-pending-minutes }}
+          update-pending-branches: ${{ inputs.update-pending-branches }}
+          status-context: ${{ inputs.status-context }}
+          update-token: ${{ secrets.update-token }}
+          token: ${{ secrets.token || github.token }}
