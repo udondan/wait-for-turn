@@ -1,7 +1,7 @@
 # wait-for-turn
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/banner.webp">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/banner-dark.webp">
   <img alt="wait-for-turn: Wait in line. Run one at a time." src=".github/banner-light.webp">
 </picture>
 
