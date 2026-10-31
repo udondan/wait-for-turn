@@ -1,0 +1,67 @@
+# End-to-end test pipeline for wait-for-turn. The settings come from repository
+# variables, so a scenario changes them with `gh variable set` instead of a
+# commit to main, which would make every open pull request behind.
+name: Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  wait-for-turn:
+    if: github.event_name == 'pull_request' || vars.TEST_MAIN == 'true'
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: read
+      statuses: write
+    uses: udondan/wait-for-turn/.github/workflows/wait-for-turn.yml@__ACTION_REF__ # zizmor: ignore[unpinned-uses] the ref under test
+    with:
+      label-weights: ${{ vars.LABEL_WEIGHTS }}
+      no-pull-request-weight: ${{ fromJSON(vars.NO_PR_WEIGHT || '-100') }}
+      poll-interval-seconds: ${{ fromJSON(vars.POLL || '10') }}
+      queued-poll-interval-seconds: ${{ fromJSON(vars.QUEUED_POLL || '30') }}
+      timeout-minutes: ${{ fromJSON(vars.TIMEOUT || '60') }}
+      require-up-to-date: ${{ vars.REQUIRE_UP_TO_DATE != 'false' }}
+      merge-wait-minutes: ${{ fromJSON(vars.MERGE_WAIT || '10') }}
+      yield-to-pending-minutes: ${{ fromJSON(vars.YIELD || '10') }}
+      update-pending-branches: ${{ vars.UPDATE_PENDING == 'true' }}
+      status-context: wait-for-turn
+    secrets:
+      update-token: ${{ vars.USE_UPDATE_TOKEN == 'true' && secrets.UPDATE_TOKEN || '' }}
+
+  deploy:
+    needs: wait-for-turn
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || vars.TEST_MAIN == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check turn
+        if: needs.wait-for-turn.result != 'success'
+        run: exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Use resource
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SECONDS_TO_USE: ${{ vars.DEPLOY_SECONDS || '60' }}
+        run: exec bash scripts/use-resource.sh pipeline "$SECONDS_TO_USE"
+
+  required:
+    needs: [wait-for-turn, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

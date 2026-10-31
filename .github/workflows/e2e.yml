@@ -1,0 +1,66 @@
+---
+# Runs the end-to-end scenarios of test/e2e against the test repository
+# udondan/wait-for-turn-e2e, by hand only. Takes about 1.5 hours. Needs the
+# secret E2E_TOKEN: a fine-grained token for the test repository, see
+# test/e2e/README.md.
+name: End-to-end tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit of the action to test
+        default: main
+        required: true
+      scenarios:
+        description: Scenario numbers separated by spaces, all but 00 if empty
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+# The scenarios reset the shared test repository, two runs would break each
+# other.
+concurrency:
+  group: e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Use the token for git pushes to the test repository
+        env:
+          GH_TOKEN: ${{ secrets.E2E_TOKEN }}
+        run: gh auth setup-git
+
+      - name: Run scenarios
+        env:
+          GH_TOKEN: ${{ secrets.E2E_TOKEN }}
+          REF: ${{ inputs.ref }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          read -ra scenarios <<<"$SCENARIOS"
+          test/e2e/run.sh --ref "$REF" "${scenarios[@]}"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            cat test/e2e/results/run.txt 2>/dev/null || echo "no results"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-results
+          path: test/e2e/results/
+          include-hidden-files: true

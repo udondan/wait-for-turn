@@ -26,7 +26,7 @@ jobs:
           install_args: shellcheck
 
       - name: Lint wait.sh and tests
-        run: shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh
+        run: shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh test/e2e/*.sh test/e2e/scenarios/*.sh test/e2e/template/scripts/*.sh
 
   test:
     runs-on: ubuntu-latest
@@ -71,7 +71,9 @@ jobs:
 
       # Also runs shellcheck over every `run:` block.
       - name: actionlint
-        run: actionlint
+        run: |
+          actionlint
+          actionlint test/e2e/template/.github/workflows/*.yml
 
       - name: zizmor
         run: zizmor .
