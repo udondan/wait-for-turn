@@ -49,7 +49,8 @@ $final[0] as $final
       run: $r.id, attempt: $js[0].run_attempt, workflow: $r.workflow, pr: $r.pr, event: $r.event,
       start: ($js | map(.created_at | ts) | min),
       end: ($js | map(.completed_at | ts) | max),
-      wait: {start: ($w.started_at | ts), end: ($w.completed_at | ts), conclusion: $w.conclusion, job: $w.id},
+      wait: {start: ($w.started_at | ts), end: ($w.completed_at | ts), conclusion: $w.conclusion, job: $w.id,
+        step: ($w.steps // [] | map(select(.name == "Wait for turn")) | first | .conclusion)},
       deploy: (if $u != null and $u.started_at != null and $u.conclusion != "skipped"
         then {start: ($u.started_at | ts), end: ($u.completed_at | ts), conclusion: $u.conclusion} else null end)
     }] as $attempts
@@ -124,6 +125,7 @@ $final[0] as $final
       run: $r.id, pr: $r.pr, workflow: $r.workflow, event: $r.event, head_sha: $r.head_sha, html_url: $r.html_url,
       attempts: [$attempts[] | select(.run == $r.id) | {attempt, wait: {conclusion: .wait.conclusion, start: (.wait.start | iso), end: (.wait.end | iso)}, deploy: (if .deploy then .deploy + {start: (.deploy.start | iso), end: (.deploy.end | iso)} else null end)}],
       wait_conclusion: $last.wait.conclusion,
+      wait_step: $last.wait.step,
       statuses: [$final.statuses[$r.head_sha][]? | select(.target_url | endswith("/runs/\($r.id)")) | {context, state, description, at: .created_at}],
       annotations: [$r.jobs[] | select(.name | startswith("wait-for-turn")) | $final.annotations[.id | tostring][]?]
     }
@@ -133,9 +135,10 @@ $final[0] as $final
   | ({success: "success", failure: "failure", cancelled: "error"}[$r.wait_conclusion]) as $expected
   | if ($r.statuses | length) == 0 then "run \($r.run) (#\($r.pr)): no status, wait job \($r.wait_conclusion)"
     elif $r.statuses[0].state != "pending" then "run \($r.run) (#\($r.pr)): first status \($r.statuses[0].state)"
-    # A run of an outdated commit can fail as outdated just before its
-    # concurrency group cancels it: the job ends cancelled, the status failure.
-    elif $r.wait_conclusion == "cancelled" and ($r.statuses | last | .state == "failure" and (.description | startswith("Outdated, a newer commit"))) then empty
+    # The wait step can fail (outdated, rebased) just before the concurrency
+    # group of the new commit cancels the run: the job ends cancelled, the
+    # step and the status failure.
+    elif $r.wait_conclusion == "cancelled" and $r.wait_step == "failure" and ($r.statuses | last | .state) == "failure" then empty
     elif $expected != null and ($r.statuses | last | .state) != $expected then
       "run \($r.run) (#\($r.pr)): last status \($r.statuses | last | "\(.state) \(.description)"), wait job \($r.wait_conclusion)"
     else empty end] as $status_problems
