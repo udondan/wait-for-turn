@@ -29,7 +29,7 @@ wait_settled 1200
 scenario_finish
 
 expect_turn_pattern "$first ($a $b|$b $a) $release"
-expect_status "$release" "Letting #($a|$b)(, #($a|$b))? go first\.$"
+expect_status "$release" "Letting #($a #$b|$b #$a) go first\.$"
 expect_merged "$first" "$a" "$b"
 expect_final_status "$release" '^success Took the turn'
 scenario_end
