@@ -13,8 +13,8 @@ Tool versions are pinned in `mise.toml` (bats, ruby, shellcheck, actionlint, ziz
 - Tests: `bats test/`
 - Single test: `bats test/wait.bats -f "takes the turn when it is free"` (`-f` is a regex on the test name)
 - Coverage: `bundle install`, then `bundle exec bashcov -- test/coverage.sh` (on macOS add `--bash-path "$(command -v bash)"`, bashcov defaults to `/bin/bash` 3.2). Writes `coverage/index.html` and `coverage/coverage.xml`, which CI uploads to Codecov. Only `wait.sh` is traced and counted, see `test/coverage.sh` and `.simplecov`. Coverage is 100%: avoid commands continued with a trailing `\` in `wait.sh`, bashcov counts their first line as never run. Put long jq programs and fixed arguments into variables instead (like `queue_query` and `queue_args`).
-- Lint: `shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh`
-- Workflow lint: `actionlint` (also shellchecks every `run:` block) and `zizmor .`. actionlint doesn't know `$/` yet, `.github/actionlint.yaml` ignores those two errors.
+- Lint: `shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh test/e2e/*.sh test/e2e/scenarios/*.sh test/e2e/template/scripts/*.sh`
+- Workflow lint: `actionlint` (also shellchecks every `run:` block), `actionlint test/e2e/template/.github/workflows/*.yml` and `zizmor .`. actionlint doesn't know `$/` yet, `.github/actionlint.yaml` ignores those two errors.
 
 ## How wait.sh works
 
@@ -39,3 +39,7 @@ Tests run the real `wait.sh` against a file-backed fake GitHub API:
 ## Releases
 
 release-please (`release-type: simple`) builds CHANGELOG.md and tags from conventional commits on main; the workflow then moves the major tag (`v1`) that users reference. PRs are squash-merged and the PR title must be a conventional commit (checked by `pr-conventional-title.yml`), since it becomes the commit release-please reads.
+
+## End-to-end tests
+
+`test/e2e/` runs the action for real in the throwaway repository `udondan/wait-for-turn-e2e`: scenarios open parallel pull requests, an observer records lock refs, runs and pull requests, and an analyzer checks mutual exclusion, order, release and commit statuses. Not run in CI, each scenario takes 5 to 30 minutes. See `test/e2e/README.md`. A behavior change that the bats tests can't show (API timing, auto-merge, rebases with a token, cancellation) should get a scenario there.
