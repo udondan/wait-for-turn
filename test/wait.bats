@@ -677,6 +677,22 @@ EOF
   assert_holds 1
 }
 
+@test "a signal while sleeping sets status error right away" {
+  holder_running
+  export INPUT_POLL_INTERVAL=60 FAKE_REAL_SLEEP=1
+  env BASH_ENV="$FAKE_LIB/fake-sleep.bash" bash "$BATS_TEST_DIRNAME/../wait.sh" >"$FAKE_STATE/out" 2>&1 3>&- &
+  local pid=$! started=$SECONDS
+  until [ -s "$FAKE_STATE/ticks/sleep_pid" ]; do command sleep 0.1; done
+  kill -TERM "$pid"
+  status=0
+  wait "$pid" || status=$?
+  output=$(cat "$FAKE_STATE/out")
+  kill "$(cat "$FAKE_STATE/ticks/sleep_pid")" 2>/dev/null || true
+  assert_status 130
+  [ $((SECONDS - started)) -lt 10 ] || { echo "took $((SECONDS - started))s"; return 1; }
+  assert_last_commit_status "error|Cancelled while waiting for the turn."
+}
+
 @test "no commit status without status-context" {
   export INPUT_STATUS_CONTEXT=""
   run_wait

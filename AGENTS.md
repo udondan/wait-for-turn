@@ -32,7 +32,7 @@ Tool versions are pinned in `mise.toml` (bats, ruby, shellcheck, actionlint, ziz
 Tests run the real `wait.sh` against a file-backed fake GitHub API:
 
 - `test/bin/gh` is put first on `PATH` and answers `gh api` / `gh pr update-branch` from state files in `$FAKE_STATE`. Any call it doesn't know is logged as `UNHANDLED` and fails the test in `teardown`, so **a new API call in wait.sh needs a matching case in `test/bin/gh`**.
-- `test/lib/fake-sleep.bash` is injected via `BASH_ENV` and replaces `sleep`: it advances `SECONDS` instead of waiting, runs per-tick scripts, and aborts after `FAKE_MAX_TICKS` (default 100) sleeps.
+- `test/lib/fake-sleep.bash` is injected via `BASH_ENV` and replaces `sleep` and `wait` (wait.sh sleeps with `pause`, `sleep n & wait $!`, so the INT/TERM trap runs right away): it advances `SECONDS` instead of waiting, runs per-tick scripts, and aborts after `FAKE_MAX_TICKS` (default 100) sleeps. With `FAKE_REAL_SLEEP` it really sleeps, for signal tests.
 - `test/lib/state.bash` documents the state layout and has the builders (`add_run`, `add_pr`, `set_pr`, `complete_run`, `hold_lock`, `set_behind`, `fail_api`, `at_tick`, `stop_at_tick`, `on_api`). Use `at_tick <n> '<code>'` to change the world during wait.sh's nth sleep.
 - `test/helpers.bash` sets the default env (this run is id 100 of PR 1, workflow `test.yml`) and assertions (`assert_locks`, `assert_holds`, `assert_last_commit_status`, `count_calls`, ...). Run the script with `run_wait`.
 

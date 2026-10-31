@@ -118,4 +118,4 @@ runs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         UPDATE_TOKEN: ${{ inputs.update-token }}
-      run: bash "$GITHUB_ACTION_PATH/wait.sh"
+      run: exec bash "$GITHUB_ACTION_PATH/wait.sh"

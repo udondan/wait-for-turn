@@ -106,6 +106,14 @@ on_exit() {
 trap on_exit EXIT
 trap 'fail_state=error; fail_description="Cancelled while waiting for the turn."; exit 130' INT TERM
 
+# Sleeps in the background and waits for it. Bash runs the INT/TERM trap only
+# after a foreground command returns, and the runner kills the step a few
+# seconds after cancelling it, long before a poll interval ends.
+pause() {
+  sleep "$1" &
+  wait "$!"
+}
+
 # Fails the run if the branch is behind the base branch. Testing an outdated
 # branch is wasted time: it has to be updated and tested again anyway.
 # With "strict", a failing API request fails the run as well.
@@ -471,7 +479,7 @@ while true; do
         break
       fi
       echo "Could not take the turn, another run may have been faster. Retrying."
-      sleep "$interval"
+      pause "$interval"
       continue
     fi
 
@@ -508,7 +516,7 @@ while true; do
     echo "::error::Timed out after $timeout_minutes minutes waiting for the turn."
     exit 1
   fi
-  sleep "$sleep_for"
+  pause "$sleep_for"
 done
 
 if [ "$require_up_to_date" = "true" ]; then
