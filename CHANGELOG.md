@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/udondan/wait-for-turn/compare/v1.7.1...v1.8.0) (2026-10-31)
+
+
+### Features
+
+* add the wait job as a reusable workflow ([#26](https://github.com/udondan/wait-for-turn/issues/26)) ([126172c](https://github.com/udondan/wait-for-turn/commit/126172cdf5393d7fcfe1aa7500f8721ffc87377a))
+
 ## [1.7.1](https://github.com/udondan/wait-for-turn/compare/v1.7.0...v1.7.1) (2026-10-30)
 
 
