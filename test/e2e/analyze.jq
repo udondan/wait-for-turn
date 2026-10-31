@@ -71,11 +71,15 @@ $final[0] as $final
   | "run \($prev.run) (#\($prev.pr)) \($prev.deploy.start | iso)-\($prev.deploy.end | iso) and run \($d[$i].run) (#\($d[$i].pr)) from \($d[$i].deploy.start | iso)"] as $overlaps
 
 # Lock integrity: each lock number was taken by one run, and the runs used the
-# resource in the order of their lock numbers.
+# resource in the order of their lock numbers. A run cancelled or failed right
+# after it took the turn, before its deploy started, is left out of the lock
+# order.
 | [$turns[] | select((.runs | length) > 1) | "lock \(.workflow)/\(.n) by runs \(.runs | join(", "))"] as $double_locks
 | [$attempts | map(select(.deploy != null)) | group_by(.workflow)[] | sort_by(.deploy.start) | map(.run)
   | reduce .[] as $r ([]; if last == $r then . else . + [$r] end)] as $deploy_orders
-| [$turns | group_by(.workflow)[] | map(.run)] as $lock_orders
+| ([$attempts[] | select(.deploy != null) | .run] | unique) as $deployed
+| ([$runs[] | select(.conclusion == "success") | .id]) as $succeeded
+| [$turns | group_by(.workflow)[] | map(.run | select(IN($deployed[], $succeeded[])))] as $lock_orders
 | [$deploy_orders[] as $d | select(($lock_orders | index([$d])) == null)
   | "deploy order \($d | join(" ")), lock orders \($lock_orders | map(join(" ")) | join(" / "))"] as $order_mismatch
 
