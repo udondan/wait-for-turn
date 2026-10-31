@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/udondan/wait-for-turn/compare/v1.8.0...v1.9.0) (2026-10-31)
+
+
+### Features
+
+* don't wait for tested pull requests that are behind, optionally rebase them ([#28](https://github.com/udondan/wait-for-turn/issues/28)) ([697a84f](https://github.com/udondan/wait-for-turn/commit/697a84fc4c8d75f99cd8f7e7f0d3f5fbdbb5078d))
+
 ## [1.8.0](https://github.com/udondan/wait-for-turn/compare/v1.7.1...v1.8.0) (2026-10-31)
 
 
