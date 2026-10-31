@@ -1,6 +1,9 @@
 # wait-for-turn
 
-![wait-for-turn: Wait in line. Run one at a time.](.github/banner.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/banner.webp">
+  <img alt="wait-for-turn: Wait in line. Run one at a time." src=".github/banner-light.webp">
+</picture>
 
 [![Release](https://img.shields.io/github/v/release/udondan/wait-for-turn)](https://github.com/udondan/wait-for-turn/releases/latest)
 [![Marketplace](https://img.shields.io/badge/marketplace-wait--for--turn-blue?logo=github)](https://github.com/marketplace/actions/wait-for-turn)
