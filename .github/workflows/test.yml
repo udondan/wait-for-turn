@@ -78,9 +78,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }} # zizmor checks the actions online
 
+  # Calls the reusable workflow of this commit as other repositories do, so a
+  # broken change of it or of the action fails here before it is released.
+  # Pull requests from forks get no write permissions and can't take the turn.
+  wait-for-turn:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      actions: read
+      contents: write # lock refs under refs/wait-for-turn/
+      pull-requests: read # labels for label-weights
+      statuses: write # queue position as commit status
+    uses: $/.github/workflows/wait-for-turn.yml
+    secrets:
+      update-token: ${{ secrets.OVERRIDE_TOKEN }}
+
   # The only test check the ruleset requires, whatever jobs are added later.
   required:
-    needs: [shellcheck, test, actions]
+    needs: [shellcheck, test, actions, wait-for-turn]
     if: always()
     runs-on: ubuntu-latest
     steps:

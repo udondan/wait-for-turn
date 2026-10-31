@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A composite GitHub Action. `action.yml` maps inputs to `INPUT_*` env vars (plus PR context like `PR_NUMBER`, `BASE_REF`, `HEAD_SHA`, `HEAD_REPO`, `UPDATE_TOKEN`) and runs `wait.sh`. All logic is in `wait.sh` (bash + `gh api` + `jq`). There is no build step and no package manager. README.md documents user-facing behavior; keep it, `action.yml` input descriptions and the header comment of `wait.sh` in sync when behavior changes.
+A composite GitHub Action. `action.yml` maps inputs to `INPUT_*` env vars (plus PR context like `PR_NUMBER`, `BASE_REF`, `HEAD_SHA`, `HEAD_REPO`, `UPDATE_TOKEN`) and runs `wait.sh`. All logic is in `wait.sh` (bash + `gh api` + `jq`). There is no build step and no package manager. `.github/workflows/wait-for-turn.yml` is a reusable workflow (`on: workflow_call`, never runs on its own) with the recommended wait job; it calls the action with `uses: $/`, the same commit, and `test.yml` calls it on every PR as a test. README.md documents user-facing behavior; keep it, `action.yml` input descriptions, the inputs of the reusable workflow and the header comment of `wait.sh` in sync when behavior changes.
 
 ## Commands
 
@@ -14,7 +14,7 @@ Tool versions are pinned in `mise.toml` (bats, ruby, shellcheck, actionlint, ziz
 - Single test: `bats test/wait.bats -f "takes the turn when it is free"` (`-f` is a regex on the test name)
 - Coverage: `bundle install`, then `bundle exec bashcov -- test/coverage.sh` (on macOS add `--bash-path "$(command -v bash)"`, bashcov defaults to `/bin/bash` 3.2). Writes `coverage/index.html` and `coverage/coverage.xml`, which CI uploads to Codecov. Only `wait.sh` is traced and counted, see `test/coverage.sh` and `.simplecov`. Coverage is 100%: avoid commands continued with a trailing `\` in `wait.sh`, bashcov counts their first line as never run. Put long jq programs and fixed arguments into variables instead (like `queue_query` and `queue_args`).
 - Lint: `shellcheck -x wait.sh test/bin/gh test/lib/*.bash test/helpers.bash test/wait.bats test/coverage.sh`
-- Workflow lint: `actionlint` (also shellchecks every `run:` block) and `zizmor .`
+- Workflow lint: `actionlint` (also shellchecks every `run:` block) and `zizmor .`. actionlint doesn't know `$/` yet, `.github/actionlint.yaml` ignores those two errors.
 
 ## How wait.sh works
 

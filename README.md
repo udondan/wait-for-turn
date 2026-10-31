@@ -83,6 +83,41 @@ jobs:
 
 All runs of the workflow must use this action, otherwise they don't take part in the queue. The `concurrency` group and the `Check turn` step are explained in [Workflow setup](#workflow-setup).
 
+## Reusable workflow
+
+The wait job can also be called as a [reusable workflow](https://docs.github.com/en/actions/sharing-automations/reusing-workflows), so the job settings are kept in one place instead of in every repository:
+
+```yaml
+jobs:
+  wait-for-turn:
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: read
+      statuses: write
+    uses: udondan/wait-for-turn/.github/workflows/wait-for-turn.yml@v1
+    secrets:
+      update-token: ${{ secrets.UPDATE_TOKEN }}
+
+  deploy:
+    needs: wait-for-turn
+    # ...
+```
+
+It runs the action with a `concurrency` group that cancels outdated waiting runs (see [Workflow setup](#workflow-setup)) and queues on the calling workflow. The action comes from the same commit as the workflow file, so `@v1` follows every release of both. The calling job can still have its own `needs` and `if`, but no `runs-on` or `steps`. Its permissions are the most the called job gets, so grant them there. `statuses: write` is only needed for `status-context`. In the checks of a pull request, the job is shown as `wait-for-turn / Wait for turn`.
+
+The inputs are the [inputs](#inputs) of the action, with the secrets `update-token` and `token`. Some defaults differ from the action's, to match the setup this README recommends:
+
+| Name                     | Default of the workflow                      |
+| ------------------------ | -------------------------------------------- |
+| `label-weights`          | `autorelease: pending=-10` and `renovate=-5` |
+| `no-pull-request-weight` | `-100`                                       |
+| `timeout-minutes`        | `180`                                        |
+| `require-up-to-date`     | `true`                                       |
+| `status-context`         | `wait-for-turn`                              |
+
+Pass `label-weights: ''` or `status-context: ''` under `with:` to turn them off.
+
 ## Inputs
 
 | Name                           | Default                     | Description                                                                 |
