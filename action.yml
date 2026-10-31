@@ -58,7 +58,9 @@ inputs:
       When the run holding the turn succeeded and its pull request has
       auto-merge enabled, keep the turn held until the pull request is merged,
       for at most this many minutes. Otherwise the next run would take the turn
-      right before the merge and test an outdated branch. 0 disables this.
+      right before the merge and test an outdated branch. A pull request
+      blocked by a failed required check releases the turn right away. 0
+      disables this.
     required: false
     default: '10'
   yield-to-pending-minutes:

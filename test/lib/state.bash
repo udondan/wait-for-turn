@@ -8,6 +8,7 @@
 #   runs.json      workflow runs of the queued workflow
 #   pulls.json     pull requests
 #   compare/<sha>  commits <sha> is behind main, 0 if missing
+#   checks/<pr>    GraphQL check contexts of the head commit of a pull request
 #   commits/<sha>  message of a commit created through the API
 #   refs/<ref>     sha of a ref, without the refs/ prefix
 #   fail           "<http code> <regex>" lines, matching API calls fail
@@ -70,6 +71,13 @@ add_pr() {
 # set_pr <number> <jq expression applied to the pull request>
 set_pr() {
   json_edit pulls.json --argjson n "$1" "map(if .number == \$n then ($2) else . end)"
+}
+
+# set_checks <number> <JSON array of GraphQL check contexts>, for example
+# '[{"name": "test", "conclusion": "FAILURE", "isRequired": true}]'
+set_checks() {
+  mkdir -p "$FAKE_STATE/checks"
+  printf '%s\n' "$2" >"$FAKE_STATE/checks/$1"
 }
 
 # set_behind <sha> <commits behind main>

@@ -17,9 +17,9 @@
 # When the holder succeeded and its pull request has auto-merge enabled, the
 # pull request is merged a few seconds after the run completes. A run taking the
 # turn in between would test a branch that is outdated right after. The turn
-# stays held until the pull request is merged or can't be merged, or a new
-# commit was pushed to it: auto-merge waits for the run of the new commit, which
-# waits for the turn.
+# stays held until the pull request is merged or can't be merged, for example
+# because a required check failed, or a new commit was pushed to it: auto-merge
+# waits for the run of the new commit, which waits for the turn.
 #
 # After a merge, the branches of the other pull requests are behind and their
 # runs fail as outdated. A pull request updated right away, for example a
@@ -197,13 +197,33 @@ is_active() {
   return 1
 }
 
+# Required checks of the head commit of a pull request that failed, from the
+# GraphQL API: the REST API doesn't tell which checks are required.
+# shellcheck disable=SC2016 # GraphQL variables, not shell
+failed_checks_query='query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+        ... on CheckRun { name conclusion isRequired(pullRequestNumber: $number) }
+        ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
+      } } } } } }
+    }
+  }
+}'
+failed_checks_jq='[.data.repository.pullRequest.commits.nodes[].commit.statusCheckRollup.contexts.nodes[]?
+  | select(.isRequired and ((.conclusion // .state) | IN("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE")))
+  | .name // .context] | join(", ")'
+failed_checks_args=(-f query="$failed_checks_query" -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" --jq "$failed_checks_jq")
+checks_warned=false
+
 # Returns 0 while the pull request of a completed holder run is about to be
 # merged: the run succeeded, it tested the current head commit, and the pull
-# request is open with auto-merge enabled. Gives up after merge_wait minutes,
-# for example when other required checks fail and auto-merge never merges.
+# request is open with auto-merge enabled. A pull request that is blocked by a
+# failed required check is not merged. Gives up after merge_wait minutes, for
+# example when the checks can't be read or a review is missing.
 declare -A merge_deadlines=()
 merge_pending() {
-  local id=$1 pr=$2 pull head_sha
+  local id=$1 pr=$2 pull head_sha failed
   [ -n "$pr" ] && [ "$merge_wait" -gt 0 ] || return 1
   [ "${completed_runs[$id]:-}" = "success" ] || return 1
   if [ -z "${merge_deadlines[$id]:-}" ]; then
@@ -227,6 +247,20 @@ merge_pending() {
     # A branch that is behind or has conflicts is not merged until it is
     # updated, which starts a new run.
     "open true behind" | "open true dirty") return 1 ;;
+    "open true blocked")
+      if ! failed=$(gh api graphql "${failed_checks_args[@]}" -F number="$pr"); then
+        if [ "$checks_warned" = "false" ]; then
+          echo "::warning::Reading the checks of #$pr failed, waiting for its merge up to merge-wait-minutes."
+          checks_warned=true
+        fi
+        return 0
+      fi
+      if [ -n "$failed" ]; then
+        echo "Required checks of #$pr failed, it won't be merged: $failed."
+        return 1
+      fi
+      return 0
+      ;;
     "open true "*) return 0 ;;
   esac
   return 1

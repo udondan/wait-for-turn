@@ -41,7 +41,7 @@ fields=()
 while [ $# -gt 0 ]; do
   case $1 in
     -X) method=$2; shift 2 ;;
-    -f) fields+=("$2"); shift 2 ;;
+    -f | -F) fields+=("$2"); shift 2 ;;
     --jq) jq_query=$2; shift 2 ;;
     --silent) silent=true; shift ;;
     --paginate) shift ;;
@@ -145,6 +145,11 @@ case "$method $path" in
     run=$(jq --argjson id "${path#actions/runs/}" '.[] | select(.id == $id)' "$FAKE_STATE/runs.json")
     [ -n "$run" ] || http_error 404 "Not Found"
     respond "$run"
+    ;;
+  "POST graphql")
+    # Only the query for the failed required checks of a pull request.
+    checks=$(cat "$FAKE_STATE/checks/$(field number)" 2>/dev/null || echo '[]')
+    respond "$(jq -n --argjson c "$checks" '{data: {repository: {pullRequest: {commits: {nodes: [{commit: {statusCheckRollup: {contexts: {nodes: $c}}}}]}}}}}')"
     ;;
   "GET pulls")
     respond "$(jq 'map(select(.state == "open"))' "$FAKE_STATE/pulls.json")"
