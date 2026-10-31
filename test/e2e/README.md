@@ -24,6 +24,14 @@ Scenarios 06, 07, 09 and 10 need it.
 
 ## Running
 
+To test a version from scratch, for example before a release:
+
+```sh
+test/e2e/run.sh --ref main             # setup.sh main, then all scenarios but 00
+```
+
+This takes about two hours. It exits 0 only if every scenario passed; `results/run.txt` gets a line per scenario.
+
 ```sh
 test/e2e/setup.sh                      # once, or with a ref to test another version
 test/e2e/scenarios/00-self-test.sh     # checks the harness catches an overlap

@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
 # Runs scenarios one after another and prints a PASS/FAIL line for each.
 #
-# Usage: run.sh [scenario number or name ...], all but 00 by default
+# Usage: run.sh [--ref <action ref>] [scenario number or name ...]
+#
+# Runs all scenarios but 00 by default. With --ref, setup.sh first points the
+# test repository at that branch, tag or commit of the action, so
+# `run.sh --ref main` tests the current main from scratch.
 #
 # The output of each scenario goes to results/<name>.log.
 set -uo pipefail
 
 dir=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$dir/results"
+if [ "${1:-}" = --ref ]; then
+  ref=${2:?--ref needs a branch, tag or commit}
+  shift 2
+  "$dir/setup.sh" "$ref" || exit 2
+  printf -- '--- %s, action at %s\n' "$(date '+%Y-%m-%d %H:%M')" "$ref" | tee -a "$dir/results/run.txt"
+fi
 if [ $# -eq 0 ]; then
   for file in "$dir"/scenarios/*.sh; do
     name=$(basename "$file" .sh)
