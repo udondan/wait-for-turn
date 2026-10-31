@@ -2,7 +2,7 @@
 
 The bats tests run `wait.sh` against a fake `gh` and a fake `sleep`. These tests run the action for real, in a throwaway public repository (`udondan/wait-for-turn-e2e` by default, set `E2E_REPO` to use another one): real runs, lock refs, auto-merge, rebases with a token, concurrency cancellation and commit statuses.
 
-They are not run in CI. A scenario takes 5 to 30 minutes, all of them about 3 hours of public-repository minutes.
+They don't run on pull requests. A scenario takes 3 to 15 minutes, all of them about 1.5 hours. Run them locally (see [Running](#running)) or with the workflow [End-to-end tests](../../.github/workflows/e2e.yml) (see [In GitHub Actions](#in-github-actions)).
 
 ## The test repository
 
@@ -37,6 +37,23 @@ test/e2e/setup.sh                      # once, or with a ref to test another ver
 test/e2e/scenarios/00-self-test.sh     # checks the harness catches an overlap
 test/e2e/run.sh                        # all scenarios but 00, one after another
 test/e2e/run.sh 03 06                  # some of them
+```
+
+### In GitHub Actions
+
+The workflow `e2e.yml` runs `run.sh --ref <ref> [scenarios]`, started by hand: Actions → End-to-end tests → Run workflow, or
+
+```sh
+gh workflow run e2e.yml -R udondan/wait-for-turn -f ref=main               # all scenarios
+gh workflow run e2e.yml -R udondan/wait-for-turn -f ref=main -f scenarios="03 06"
+```
+
+The job summary shows the PASS/FAIL lines, the artifact `e2e-results` has the logs and reports. Only one run at a time, a second one waits.
+
+It needs the secret `E2E_TOKEN` in this repository: a fine-grained personal access token for the test repository only, with read and write for **Actions**, **Administration**, **Contents**, **Issues**, **Pull requests**, **Variables** and **Workflows**, and read for **Commit statuses** and **Secrets**. Keep it apart from `UPDATE_TOKEN`, so the action under test only gets the permissions users are told to give it.
+
+```sh
+gh secret set E2E_TOKEN -R udondan/wait-for-turn
 ```
 
 Each scenario first resets the repository: it closes pull requests, cancels runs, deletes branches and lock refs and restores the default variables. Don't run two at the same time.
