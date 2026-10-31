@@ -76,6 +76,8 @@ if [ -f "$FAKE_STATE/hook" ]; then
   bash "$FAKE_STATE/hook" "$method" "$path"
 fi
 check_fail "$method $path"
+# Also with the query, to fail calls of one query only, e.g. "head_sha=".
+[ -z "$query" ] || check_fail "$method $path?$query"
 
 respond() {
   if [ "$silent" = "true" ]; then

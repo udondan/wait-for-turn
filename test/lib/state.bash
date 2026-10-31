@@ -63,7 +63,8 @@ add_pr() {
     . + [{number: $n, state: "open",
       labels: ($labels | split(",") | map(select(. != "") | {name: .})),
       auto_merge: (if $auto then {merge_method: "squash"} else null end),
-      head: {sha: "head\($n)"}, base: {ref: "main"}, mergeable_state: "clean"}]'
+      head: {sha: "head\($n)", repo: {full_name: "owner/repo"}}, base: {ref: "main"},
+      mergeable_state: "clean"}]'
 }
 
 # set_pr <number> <jq expression applied to the pull request>
@@ -77,7 +78,8 @@ set_behind() {
 }
 
 # fail_api <http code> <regex on "METHOD path">
-# Path is without repos/owner/repo/ and query, e.g. "GET actions/runs/200".
+# Path is without repos/owner/repo/, e.g. "GET actions/runs/200". Calls with a
+# query are matched without and with it, e.g. "GET pulls?state=open".
 # "PR update-branch" matches gh pr update-branch.
 fail_api() {
   echo "$1 $2" >>"$FAKE_STATE/fail"

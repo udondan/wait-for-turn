@@ -26,7 +26,10 @@
 # release pull request, would then be the only waiting run and take the turn,
 # although the pull requests updated a few minutes later have a higher weight.
 # So before taking the turn, a run lets open pull requests with auto-merge
-# enabled and a higher weight go first while they are about to be tested.
+# enabled and a higher weight go first while they are about to be tested: their
+# head commit has no run yet. A pull request whose head commit was tested and is
+# behind gets no new run until its branch is updated. With
+# update-pending-branches, the run rebases it and lets the new commit go first.
 #
 # The status filter of the list-runs API (?status=in_progress) is backed by a
 # search index that can be stale and return no runs although runs are active.
@@ -45,6 +48,11 @@ timeout_minutes="${INPUT_TIMEOUT_MINUTES:-0}"
 require_up_to_date="${INPUT_REQUIRE_UP_TO_DATE:-false}"
 merge_wait="${INPUT_MERGE_WAIT:-10}"
 yield_minutes="${INPUT_YIELD_MINUTES:-10}"
+update_pending="${INPUT_UPDATE_PENDING:-false}"
+if [ "$update_pending" = "true" ] && [ -z "${UPDATE_TOKEN:-}" ]; then
+  echo "::warning::update-pending-branches needs update-token, not updating pending pull requests."
+  update_pending=false
+fi
 no_pr_weight="${INPUT_NO_PR_WEIGHT:-0}"
 if ! [[ "$no_pr_weight" =~ ^-?(0|[1-9][0-9]*)$ ]]; then
   echo "::error::Invalid no-pull-request-weight: $no_pr_weight. Expected an integer."
@@ -224,42 +232,56 @@ merge_pending() {
   return 1
 }
 
-# States of pull request head commits. "behind" when the branch is behind its
-# base branch and about to be updated, which doesn't change for a commit.
-# "tested" when the commit has a run of this workflow, checked again after
-# queued_interval as the base branch may have moved on.
+# States of pull request head commits. "tested" when the commit has a run of
+# this workflow, so no new run is about to start for it. "updated" when this run
+# rebased the branch, the new commit starts a new run. With
+# update-pending-branches, tested commits are checked again after
+# queued_interval, as the base branch may have moved on.
 declare -A head_states=() head_checked=()
+# Sets the state of head commit $2 of pull request $1, with base branch $3 and
+# head repository $4. Without a state the commit has no run yet, or a request
+# failed: unknown counts as pending, the wait is limited anyway.
+check_head() {
+  local number=$1 sha=$2 base=$3 head_repo=$4 count behind output
+  unset "head_states[$sha]"
+  count=$(gh api "$repo/actions/workflows/$workflow/runs?head_sha=$sha&per_page=1" --jq .total_count </dev/null) || return 0
+  [ "$count" -gt 0 ] || return 0
+  head_states[$sha]=tested
+  head_checked[$sha]=$SECONDS
+  [ "$update_pending" = "true" ] && [ "$head_repo" = "$GITHUB_REPOSITORY" ] || return 0
+  behind=$(gh api "$repo/compare/$base...$sha" --jq .behind_by </dev/null) || return 0
+  [ "$behind" -gt 0 ] || return 0
+  if ! output=$(GH_TOKEN="$UPDATE_TOKEN" gh pr update-branch "$number" --rebase -R "$GITHUB_REPOSITORY" </dev/null 2>&1); then
+    echo "::warning::Pull request #$number is $behind commit(s) behind $base and rebasing it failed: $output"
+    return 0
+  fi
+  echo "Pull request #$number was $behind commit(s) behind $base and was rebased, letting its new commit go first."
+  head_states[$sha]=updated
+}
+# Returns 0 when head commit $1 has no state yet, or is tested and due to be
+# checked again.
+head_unchecked() {
+  [ -n "${head_states[$1]:-}" ] || return 0
+  [ "${head_states[$1]}" = "tested" ] && [ "$update_pending" = "true" ] && [ "$SECONDS" -ge "$((head_checked[$1] + queued_interval))" ]
+}
 # Sets pending to the open pull requests with auto-merge enabled and a weight
-# higher than $1 that have no active run but are about to be tested: their
-# branch is behind and about to be updated, or their head commit has no run of
-# this workflow yet. Pull requests whose head commit was tested, successfully
-# or not, are not pending.
+# higher than $1 that have no active run but are about to be tested: their head
+# commit has no run of this workflow yet, or this run rebased their branch.
+# Pull requests whose head commit was tested, successfully or not, are not
+# pending: nothing starts a new run for them.
 # shellcheck disable=SC2016 # jq variables
 pending_query='
   .[] | select(.auto_merge and (.number | tostring) != $self)
   | select(.number as $n | all($runs[]; .pr != $n))
   | select(([.labels[] | $w[.] // 0] | add // 0) > $weight)
-  | "\(.number) \(.sha) \(.base)"'
+  | "\(.number) \(.sha) \(.base) \(.head_repo)"'
 pending_args=(--argjson w "$weights" --arg self "${PR_NUMBER:-}")
 find_pending() {
-  local weight=$1 number sha base behind count
+  local weight=$1 number sha base head_repo
   pending=""
-  while read -r number sha base; do
-    if [ "${head_states[$sha]:-}" != "behind" ] &&
-      { [ "${head_states[$sha]:-}" != "tested" ] || [ "$SECONDS" -ge "$((head_checked[$sha] + queued_interval))" ]; }; then
-      unset "head_states[$sha]"
-      if ! behind=$(gh api "$repo/compare/$base...$sha" --jq .behind_by </dev/null); then
-        # Unknown counts as pending, the wait is limited anyway.
-        pending="$pending #$number"
-        continue
-      fi
-      if [ "$behind" -gt 0 ]; then
-        head_states[$sha]=behind
-      elif count=$(gh api "$repo/actions/workflows/$workflow/runs?head_sha=$sha&per_page=1" --jq .total_count </dev/null) &&
-        [ "$count" -gt 0 ]; then
-        head_states[$sha]=tested
-        head_checked[$sha]=$SECONDS
-      fi
+  while read -r number sha base head_repo; do
+    if head_unchecked "$sha"; then
+      check_head "$number" "$sha" "$base" "$head_repo"
     fi
     if [ "${head_states[$sha]:-}" != "tested" ]; then
       pending="$pending #$number"
@@ -329,7 +351,7 @@ runs_query='[.workflow_runs[] | select(.status != "completed")
   | {id, run_started_at, html_url, head_sha, pr: (.pull_requests[0].number // null)}]'
 prs_url="$repo/pulls?state=open&per_page=100"
 prs_query='.[] | {number, labels: [.labels[].name], auto_merge: (.auto_merge != null),
-  sha: .head.sha, base: .base.ref}'
+  sha: .head.sha, base: .base.ref, head_repo: (.head.repo.full_name // "")}'
 # A run of a pull request that has a newer run is left out: its commit is
 # outdated, and it may still be active although it will never take the turn,
 # for example while other jobs finish after it failed as outdated. This run

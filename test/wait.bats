@@ -382,16 +382,116 @@ holder_succeeded() {
   assert_locks
 }
 
-@test "stops letting a pull request that is behind go first after yield-to-pending-minutes" {
+@test "stops letting a pull request go first after yield-to-pending-minutes" {
   export INPUT_LABEL_WEIGHTS="prio=5" INPUT_YIELD_MINUTES=1
   add_pr 3 prio true
-  set_behind head3 2
   run_wait
   assert_status 0
   assert_output_contains "they are about to be tested: #3."
   [ "$(count_calls '^sleep')" -eq 2 ]
-  # A commit that is behind stays behind, it is not compared again.
+  assert_holds 1
+}
+
+@test "doesn't let a tested pull request that is behind go first" {
+  export INPUT_LABEL_WEIGHTS="prio=5" UPDATE_TOKEN=update
+  add_pr 3 prio true
+  add_run 300 3 00:05 completed failure
+  set_behind head3 2
+  run_wait
+  assert_status 0
+  [ "$(count_calls '^sleep')" -eq 0 ]
+  [ "$(count_calls '^GET compare/')" -eq 0 ]
+  [ "$(count_calls '^PR update-branch')" -eq 0 ]
+  assert_holds 1
+}
+
+@test "update-pending-branches rebases a tested pull request that is behind and lets it go first" {
+  export INPUT_LABEL_WEIGHTS="prio=5" INPUT_UPDATE_PENDING=true UPDATE_TOKEN=update
+  add_pr 3 prio true
+  add_run 300 3 00:05 completed failure
+  set_behind head3 2
+  at_tick 1 'set_pr 3 ".head.sha = \"head3b\""'
+  at_tick 2 'add_run 301 3 00:20 completed success head3b'
+  run_wait
+  assert_status 0
+  assert_output_contains "Pull request #3 was 2 commit(s) behind main and was rebased, letting its new commit go first."
+  [ "$(count_calls '^PR update-branch 3 --rebase -R owner/repo token=update$')" -eq 1 ]
+  grep -qF "pending|Position 1 of 1 (weight 0). Letting #3 go first." "$FAKE_STATE/statuses.log"
+  [ "$(count_calls '^sleep')" -eq 2 ]
+  assert_holds 1
+}
+
+@test "update-pending-branches rebases a tested pull request once it falls behind" {
+  export INPUT_LABEL_WEIGHTS="prio=5" INPUT_UPDATE_PENDING=true UPDATE_TOKEN=update
+  add_pr 3 prio true
+  add_run 300 3 00:05 completed failure
+  # Pull request 4 keeps this run waiting until yield-to-pending-minutes.
+  add_pr 4 prio true
+  at_tick 1 'set_behind head3 1'
+  run_wait
+  assert_status 0
+  # Compared again after queued-poll-interval, then rebased once.
+  [ "$(count_calls '^GET compare/main...head3$')" -eq 2 ]
+  [ "$(count_calls '^PR update-branch 3 --rebase -R owner/repo token=update$')" -eq 1 ]
+  assert_holds 1
+}
+
+@test "update-pending-branches doesn't rebase a tested pull request that is up to date" {
+  export INPUT_LABEL_WEIGHTS="prio=5" INPUT_UPDATE_PENDING=true UPDATE_TOKEN=update
+  add_pr 3 prio true
+  add_run 300 3 00:05 completed failure
+  run_wait
+  assert_status 0
   [ "$(count_calls '^GET compare/main...head3$')" -eq 1 ]
+  [ "$(count_calls '^PR update-branch')" -eq 0 ]
+  assert_holds 1
+}
+
+@test "update-pending-branches doesn't rebase branches of forks" {
+  export INPUT_LABEL_WEIGHTS="prio=5" INPUT_UPDATE_PENDING=true UPDATE_TOKEN=update
+  add_pr 3 prio true
+  set_pr 3 '.head.repo.full_name = "someone/repo"'
+  add_run 300 3 00:05 completed failure
+  set_behind head3 2
+  run_wait
+  assert_status 0
+  [ "$(count_calls '^PR update-branch')" -eq 0 ]
+  assert_holds 1
+}
+
+@test "update-pending-branches doesn't let a pull request go first when rebasing it fails" {
+  export INPUT_LABEL_WEIGHTS="prio=5" INPUT_UPDATE_PENDING=true UPDATE_TOKEN=update
+  add_pr 3 prio true
+  add_run 300 3 00:05 completed failure
+  set_behind head3 2
+  fail_api 422 '^PR update-branch$'
+  run_wait
+  assert_status 0
+  assert_output_contains "::warning::Pull request #3 is 2 commit(s) behind main and rebasing it failed:"
+  [ "$(count_calls '^sleep')" -eq 0 ]
+  assert_holds 1
+}
+
+@test "update-pending-branches doesn't let a pull request go first when comparing its branch fails" {
+  export INPUT_LABEL_WEIGHTS="prio=5" INPUT_UPDATE_PENDING=true UPDATE_TOKEN=update
+  add_pr 3 prio true
+  add_run 300 3 00:05 completed failure
+  fail_api 500 '^GET compare/'
+  run_wait
+  assert_status 0
+  [ "$(count_calls '^sleep')" -eq 0 ]
+  assert_holds 1
+}
+
+@test "update-pending-branches is ignored without update-token" {
+  export INPUT_LABEL_WEIGHTS="prio=5" INPUT_UPDATE_PENDING=true
+  add_pr 3 prio true
+  add_run 300 3 00:05 completed failure
+  set_behind head3 2
+  run_wait
+  assert_status 0
+  assert_output_contains "::warning::update-pending-branches needs update-token, not updating pending pull requests."
+  [ "$(count_calls '^PR update-branch')" -eq 0 ]
   assert_holds 1
 }
 
@@ -410,10 +510,11 @@ holder_succeeded() {
   [ "$(count_calls '^sleep')" -eq 0 ]
 }
 
-@test "lets a pull request go first when its branch can't be compared" {
+@test "lets a pull request go first when the runs of its commit can't be listed" {
   export INPUT_LABEL_WEIGHTS="prio=5"
   add_pr 3 prio true
-  fail_api 500 '^GET compare/'
+  add_run 300 3 00:05 completed failure
+  fail_api 500 'head_sha='
   stop_at_tick 1
   run_wait
   assert_status 99

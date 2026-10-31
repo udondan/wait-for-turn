@@ -60,6 +60,10 @@ on:
         description: Let pending auto-merge pull requests with a higher weight go first, for at most this many minutes.
         type: number
         default: 10
+      update-pending-branches:
+        description: Also rebase pending auto-merge pull requests with a higher weight whose tested branch is behind, and let them go first. Needs the update-token secret.
+        type: boolean
+        default: false
       status-context:
         description: Context of a commit status showing the place in the queue. Empty disables it.
         type: string
@@ -100,6 +104,7 @@ jobs:
           require-up-to-date: ${{ inputs.require-up-to-date }}
           merge-wait-minutes: ${{ inputs.merge-wait-minutes }}
           yield-to-pending-minutes: ${{ inputs.yield-to-pending-minutes }}
+          update-pending-branches: ${{ inputs.update-pending-branches }}
           status-context: ${{ inputs.status-context }}
           update-token: ${{ secrets.update-token }}
           token: ${{ secrets.token || github.token }}

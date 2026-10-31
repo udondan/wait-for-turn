@@ -131,6 +131,7 @@ Pass `label-weights: ''` or `status-context: ''` under `with:` to turn them off.
 | `require-up-to-date`           | `false`                     | Fail if the PR branch is behind its base branch (see below).                |
 | `merge-wait-minutes`           | `10`                        | Keep the turn held while the holder's PR is auto-merged (see below).        |
 | `yield-to-pending-minutes`     | `10`                        | Let pending auto-merge PRs with a higher weight go first (see below).       |
+| `update-pending-branches`      | `false`                     | Rebase pending auto-merge PRs with a higher weight that are behind (below). |
 | `update-token`                 |                             | Token to rebase a PR branch that is behind (see below).                     |
 | `status-context`               |                             | Context of a commit status showing the place in the queue (see below).      |
 | `token`                        | `github.token`              | Token with `actions: read`, `contents: write` and `pull-requests: read`.    |
@@ -194,7 +195,17 @@ Not every branch gets updated after a merge. release-please, for example, leaves
 
 A successful run often gets its pull request merged by auto-merge, a few seconds after the run completes. A run taking the turn in between would pass the check and then test a branch that is outdated right after the merge. So when the run holding the turn succeeded and its pull request has auto-merge enabled, the turn stays held until the pull request is merged or closed, auto-merge is disabled, the branch turns out to be behind or conflicting, or a new commit was pushed to it. A new commit is merged only after its own run, which may be waiting for this turn. After the merge, the waiting runs fail as outdated. The wait ends after `merge-wait-minutes`, for example when another required check fails and auto-merge never merges. Pull requests you merge by hand can't be predicted: a run can still take the turn right before such a merge.
 
-After a merge, the other pull requests are updated at different times. A release pull request, for example, is updated right away, while Renovate updates its branches a few minutes later. The run of the release pull request would be the only waiting run and take the turn, although it has the lowest weight. So before taking the turn, a run lets open pull requests with auto-merge enabled and a higher weight go first while they are about to be tested: their branch is behind the base branch and about to be updated, or their head commit has no run of the workflow yet. Pull requests whose head commit was already tested, successfully or not, don't hold up the queue. The wait ends after `yield-to-pending-minutes`, for example when a branch is never updated.
+After a merge, the other pull requests are updated at different times. A release pull request, for example, is updated right away, while Renovate updates its branches a few minutes later. The run of the release pull request would be the only waiting run and take the turn, although it has the lowest weight. So before taking the turn, a run lets open pull requests with auto-merge enabled and a higher weight go first while they are about to be tested: their head commit has no run of the workflow yet. Pull requests whose head commit was already tested, successfully or not, don't hold up the queue, even when their branch is behind: nothing starts a new run for them until the branch is updated. The wait ends after `yield-to-pending-minutes`, for example when a run never starts.
+
+With `update-pending-branches: true` and `update-token`, the waiting run also rebases such a pull request when its tested branch is behind, and lets the new commit go first. This keeps the order by weight after a merge, without waiting for the branch to be updated by someone else. It costs a run per rebase, also for a pull request whose tests fail: it is tested again each time its base branch moves on. Branches of forks are never updated.
+
+```yaml
+      - uses: udondan/wait-for-turn@v1
+        with:
+          require-up-to-date: true
+          update-pending-branches: true
+          update-token: ${{ secrets.UPDATE_TOKEN }}
+```
 
 ## Queue status
 

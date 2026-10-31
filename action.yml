@@ -64,13 +64,21 @@ inputs:
   yield-to-pending-minutes:
     description: >-
       Before taking the turn, let open pull requests with auto-merge enabled and
-      a higher weight go first while they are about to be tested: their branch
-      is behind and about to be updated, or their head commit has no run yet.
-      Otherwise a pull request updated right after a merge takes the turn
-      before the ones updated a few minutes later. Gives up after this many
-      minutes. 0 disables this.
+      a higher weight go first while they are about to be tested: their head
+      commit has no run yet. Otherwise a pull request updated right after a
+      merge takes the turn before the ones updated a few minutes later. Gives up
+      after this many minutes. 0 disables this.
     required: false
     default: '10'
+  update-pending-branches:
+    description: >-
+      With yield-to-pending-minutes, also rebase the branches of open pull
+      requests with auto-merge enabled and a higher weight whose head commit was
+      tested but is behind the base branch, and let their new commit go first.
+      Without this, such pull requests are not waited for: nothing starts a new
+      run for them. Needs update-token. Branches of forks are never updated.
+    required: false
+    default: 'false'
   status-context:
     description: >-
       Context of a commit status that shows the run's place in the queue while
@@ -103,6 +111,7 @@ runs:
         INPUT_REQUIRE_UP_TO_DATE: ${{ inputs.require-up-to-date }}
         INPUT_MERGE_WAIT: ${{ inputs.merge-wait-minutes }}
         INPUT_YIELD_MINUTES: ${{ inputs.yield-to-pending-minutes }}
+        INPUT_UPDATE_PENDING: ${{ inputs.update-pending-branches }}
         INPUT_STATUS_CONTEXT: ${{ inputs.status-context }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
