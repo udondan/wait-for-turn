@@ -215,6 +215,11 @@ The log shows the queue, but GitHub doesn't show the log of a composite action l
 - success once the run took the turn
 - failure when waiting failed, e.g. on timeout or an outdated branch, and error when the run was cancelled
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/statuses-dark.webp">
+  <img alt="Examples of the wait-for-turn commit status: took the turn, waiting in line behind a running pull request, waiting for a pull request to be merged, letting a pull request with a higher weight go first, the turn is free, branch behind, outdated commit" src=".github/statuses-light.webp" width="820">
+</picture>
+
 The token needs `statuses: write`. Without it, the action logs a warning and waits without the status. A run killed before it can clean up leaves the status pending.
 
 ```yaml
