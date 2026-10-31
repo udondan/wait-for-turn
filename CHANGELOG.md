@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.9.1](https://github.com/udondan/wait-for-turn/compare/v1.9.0...v1.9.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* release the turn when the holder's pull request has a failed required check ([#33](https://github.com/udondan/wait-for-turn/issues/33)) ([b8d9fce](https://github.com/udondan/wait-for-turn/commit/b8d9fce972a70b70d5501d3249267caf4f2899ce))
+* set the error status when a waiting run is cancelled ([#32](https://github.com/udondan/wait-for-turn/issues/32)) ([61ed5bb](https://github.com/udondan/wait-for-turn/commit/61ed5bb9bc9ee7e840538ea7e66acf0c4954c543))
+
 ## [1.9.0](https://github.com/udondan/wait-for-turn/compare/v1.8.0...v1.9.0) (2026-10-31)
 
 
